@@ -1,2 +1,8 @@
-# Personal session notes written by /past
-.claude/sessions.md
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
