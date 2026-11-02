@@ -4,18 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-agent-lineup reviews what a coding agent changed and flags risky edits before commit.
-- Stage 1 (now): Claude Code skills only, no code yet.
-  - `/lineup` in `.claude/skills/lineup/` reviews uncommitted changes and gives a risk report.
-  - `/past` in `.claude/skills/past/` is the end-of-session wrap-up.
-- Stage 2 (later, not yet): a Python CLI `lineup` (`start` / `report`), rule-based, built from what Stage 1 shows matters. Don't write Python or CLI code until asked.
+agent-lineup is a Python CLI, `lineup`, that runs after a coding agent (Claude Code or Codex) makes changes.
+`diff` finds the changes, `risky` scores and flags them, `rollback` undoes a file.
+- v1 spec: `docs/plan.md`. Follow it and don't add features outside it.
+- Deadline: v1 done by Nov 7, 2026; testers start Nov 10.
 
-## Session continuity
-
-- At the start of a session, read the session history below and continue from "Next session plan" unless the user says otherwise.
-- At the end of a session the user runs `/past`. It updates the session history (max 3 sessions) and the Working preferences in ~/.claude/CLAUDE.md.
-
-@.claude/sessions.md
+## Commands
+- Install for development: `pip install -e ".[dev]"`
+- Run tests: `pytest`
 
 ## Project rules
-- Keep it simple: one file per skill, no scripts, unless asked.
+- Python 3.10+, standard library only at runtime. pytest for tests.
+- Code must work on Windows, Mac and Linux (no OS-specific paths or shell tricks).
+- Build in phases (see `docs/plan.md` build order). After each phase: tests pass, show Harsha, commit each small change after OK, then push.
+- Never send `.env`, key or credential file contents to the LLM, and never write code into any log.
