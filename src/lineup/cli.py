@@ -38,7 +38,12 @@ def _diff(args):
         return 2
     if store.has_snapshot(root):
         table = store.load_table(root)
+        flagged = snapshot.check_commits(root, table)
+        if flagged:
+            names = ", ".join(f"{path} ({kind})" for path, kind in flagged)
+            print(f"Committed since last check: {names}\n")
         found = changes.find_changes(root, table)
+        snapshot.record_check(root, table, found)
         label = f"photo taken {table['taken_at']} at {_commit_label(table['start_commit'])}"
     else:
         table = None

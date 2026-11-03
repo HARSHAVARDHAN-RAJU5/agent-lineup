@@ -65,3 +65,51 @@ def summary(table):
     if c["big"]:
         parts.append(f"{c['big']} big file{'' if c['big'] == 1 else 's'} can't be undone")
     return ", ".join(parts)
+
+
+def check_commits(root, table):
+    """Files in commits made since the last check: flag them first, then take them off the undo list.
+
+    Returns [(path, file kind)] of the flagged files.
+    """
+    head = git.head_commit(root)
+    last = table["last_seen_commit"]
+    if not head or head == last:
+        return []
+
+    flagged = [(path, changes.file_kind(path)) for path in git.files_between(root, last, head)]
+    for path, kind in flagged:  # 1. flag first
+        store.log(root, f"commit {head[:7]}: {path} ({kind}) flagged")
+    for path, _ in flagged:  # 2. then off the undo list
+        row = table["files"].get(path, {})
+        if row.get("copy"):
+            store.delete_copy(root, path)
+        new_row = {"status": "committed", "base": head}
+        if "id" in row:
+            new_row["id"] = row["id"]
+        table["files"][path] = new_row
+        store.log(root, f"commit {head[:7]}: {path} taken off the undo list")
+
+    table["last_seen_commit"] = head
+    store.save_table(root, table)
+    return flagged
+
+
+def record_check(root, table, found):
+    """Give each changed file a fixed ID and mark what changed in this check."""
+    changed = set()
+    for change in found:
+        row = table["files"].setdefault(change.path, {})
+        if "id" not in row:
+            row["id"] = table["next_id"]
+            table["next_id"] += 1
+        row["status"] = "changed"
+        changed.add(change.path)
+    for path, row in table["files"].items():
+        if row.get("status") == "changed" and path not in changed:
+            row["status"] = "unchanged"  # e.g. Claude put it back the way it was
+
+    table["last_check"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    store.save_table(root, table)
+    names = ", ".join(c.path for c in found)
+    store.log(root, f"checked: {len(found)} files changed ({names})" if found else "checked: no changes")
