@@ -1,20 +1,10 @@
 """Takes the "before" photo at session start: decides what to keep, and asks store.py to save it."""
 
-import hashlib
 from datetime import datetime
 from pathlib import Path
 
 from lineup import changes, git, store
 from lineup.guard import is_private
-
-
-def fingerprint(file):
-    """SHA-256 of a file: changes if the file changes, but can't be turned back into it."""
-    digest = hashlib.sha256()
-    with open(file, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _row(root, path):
@@ -23,9 +13,10 @@ def _row(root, path):
     if not file.is_file():
         return {"at_start": "missing"}
     if is_private(path):
-        return {"at_start": "private", "hash": fingerprint(file)}
-    if file.stat().st_size > changes.BIG_FILE_BYTES:
-        return {"at_start": "big"}
+        return {"at_start": "private", "hash": changes.fingerprint(file)}
+    stat = file.stat()
+    if stat.st_size > changes.BIG_FILE_BYTES:
+        return {"at_start": "big", "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
     store.save_copy(root, path, file.read_bytes())
     return {"at_start": "uncommitted", "copy": True}
 

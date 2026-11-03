@@ -42,7 +42,7 @@ def test_hidden_env_gets_fingerprint_only(project):
     table = snapshot.take(project.root)
     env = table["files"][".env"]
     assert env["at_start"] == "private"
-    assert env["hash"] == snapshot.fingerprint(project.root / ".env")
+    assert env["hash"] == changes.fingerprint(project.root / ".env")
     assert len(env["hash"]) == 64
     assert store.read_copy(project.root, ".env") is None
     for file in store.folder(project.root).rglob("*"):
@@ -63,7 +63,8 @@ def test_big_file_not_copied(project, monkeypatch):
     monkeypatch.setattr(changes, "BIG_FILE_BYTES", 40)  # notes.py is 24 bytes, model.bin 50
     project.write("model.bin", "x" * 50)
     table = snapshot.take(project.root)
-    assert table["files"]["model.bin"] == {"at_start": "big"}
+    assert table["files"]["model.bin"]["at_start"] == "big"
+    assert table["files"]["model.bin"]["size"] == 50
     assert store.read_copy(project.root, "model.bin") is None
     assert "1 big file can't be undone" in snapshot.summary(table)
 

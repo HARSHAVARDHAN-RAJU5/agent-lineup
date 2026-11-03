@@ -3,7 +3,7 @@
 import argparse
 import sys
 
-from lineup import __version__, changes, git, snapshot
+from lineup import __version__, changes, git, snapshot, store
 
 
 def _not_built(args):
@@ -36,13 +36,24 @@ def _diff(args):
     root = _root()
     if root is None:
         return 2
-    head = git.head_commit(root)
-    found = changes.find_changes(root)
-    if not found:
-        print("lineup diff: no changes since the last commit")
-        return 0
-    label = f"last commit {head[:7]}" if head else "an empty repo (no commits yet)"
-    print(changes.format_groups(changes.sort_into_groups(found), label), end="")
+    if store.has_snapshot(root):
+        table = store.load_table(root)
+        found = changes.find_changes(root, table)
+        label = f"photo taken {table['taken_at']} at {_commit_label(table['start_commit'])}"
+    else:
+        table = None
+        found = changes.find_changes(root)
+        head = git.head_commit(root)
+        label = f"last commit {head[:7]}" if head else "an empty repo (no commits yet)"
+
+    if found:
+        print(changes.format_groups(changes.sort_into_groups(found), label), end="")
+    else:
+        print(f"lineup diff: no changes since the {'photo' if table else 'last commit'}")
+
+    if table is None:  # no photo yet: take one now so the next check is exact
+        snapshot.take(root)
+        print("\nlineup: no photo existed, so one was taken now. Next check shows only new changes.")
     return 0
 
 
