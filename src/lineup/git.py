@@ -32,6 +32,12 @@ def repo_root(cwd="."):
     return Path(out.decode("utf-8", "replace").strip())
 
 
+def git_dir(root):
+    """The repo's .git folder (also right for git worktrees)."""
+    out = _run(["rev-parse", "--absolute-git-dir"], root).stdout
+    return Path(out.decode("utf-8", "replace").strip())
+
+
 def head_commit(root):
     """Current commit ID, or None if the repo has no commits yet."""
     result = _run(["rev-parse", "--verify", "--quiet", "HEAD"], root, check=False)
@@ -70,3 +76,15 @@ def blob_size(root, rev, path):
     """Size in bytes of a file at `rev`, or None if it didn't exist there."""
     result = _run(["cat-file", "-s", f"{rev}:{path}"], root, check=False)
     return int(result.stdout) if result.returncode == 0 else None
+
+
+def files_between(root, old, new):
+    """Files changed by the commits between `old` and `new`."""
+    out = _run(["diff", "--name-only", "--no-renames", "-z", old, new, "--"], root).stdout
+    return _split_z(out)
+
+
+def ignored_files(root):
+    """Files hidden by .gitignore. A hidden folder shows once, as `name/`."""
+    out = _run(["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"], root).stdout
+    return _split_z(out)
