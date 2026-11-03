@@ -3,7 +3,7 @@
 import argparse
 import sys
 
-from lineup import __version__, changes, git
+from lineup import __version__, changes, git, snapshot
 
 
 def _not_built(args):
@@ -11,11 +11,30 @@ def _not_built(args):
     return 1
 
 
-def _diff(args):
+def _root():
     try:
-        root = git.repo_root()
+        return git.repo_root()
     except git.GitError as e:
         print(f"lineup: {e}", file=sys.stderr)
+        return None
+
+
+def _commit_label(commit):
+    return "no commits yet" if commit == git.EMPTY_TREE else commit[:7]
+
+
+def _hook(args):
+    root = _root()
+    if root is None:
+        return 2
+    table = snapshot.take(root)
+    print(f"lineup: photo taken at {_commit_label(table['start_commit'])} ({snapshot.summary(table)})")
+    return 0
+
+
+def _diff(args):
+    root = _root()
+    if root is None:
         return 2
     head = git.head_commit(root)
     found = changes.find_changes(root)
@@ -42,6 +61,10 @@ def build_parser():
     rollback = sub.add_parser("rollback", help="undo one or more files by ID")
     rollback.add_argument("ids", nargs="+", type=int, help="file IDs from `lineup risky`")
     rollback.set_defaults(func=_not_built)
+
+    hook = sub.add_parser("hook", help="run by the agent's hooks (start: take the photo)")
+    hook.add_argument("event", choices=["start"])
+    hook.set_defaults(func=_hook)
 
     return parser
 

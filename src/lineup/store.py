@@ -5,6 +5,7 @@ The only module that reads or writes that folder. It saves and loads; it never d
 
 import json
 import os
+import shutil
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
@@ -86,3 +87,8 @@ def log(root, message):
 def read_log(root):
     file = folder(root) / DIARY
     return file.read_text(encoding="utf-8").splitlines() if file.is_file() else []
+
+
+def clear_copies(root):
+    """Remove every saved copy (used when a fresh photo replaces the old one)."""
+    shutil.rmtree(folder(root) / COPIES, ignore_errors=True)

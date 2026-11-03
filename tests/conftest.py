@@ -20,7 +20,7 @@ class Repo:
     def write(self, path, text):
         file = self.root / path
         file.parent.mkdir(parents=True, exist_ok=True)
-        file.write_text(text, encoding="utf-8")
+        file.write_text(text, encoding="utf-8", newline="")
 
     def delete(self, path):
         (self.root / path).unlink()
