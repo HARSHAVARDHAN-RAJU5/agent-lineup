@@ -1,5 +1,7 @@
 """Step 5: changed files get fixed IDs; new commits are flagged first, then taken off the undo list."""
 
+import json
+
 import pytest
 
 from lineup import git, snapshot, store
@@ -71,7 +73,7 @@ def test_commit_two_of_four(project):
 
     flagged, found, table = check(project)
 
-    assert flagged == [("app.py", "code"), ("notes.py", "code")]
+    assert [(c.path, c.file_kind) for c in flagged] == [("app.py", "code"), ("notes.py", "code")]
     assert table["last_seen_commit"] == head
     assert table["files"]["app.py"] == {"id": 2, "status": "committed", "base": head}
     assert table["files"]["notes.py"] == {"id": 4, "status": "committed", "base": head}
@@ -108,6 +110,53 @@ def test_diary_has_names_but_no_code(project):
     log = "\n".join(store.read_log(project.root))
     assert "checked: 4 files changed (.env, app.py, cache.py, notes.py)" in log
     assert "TIMEOUT" not in log and "line B" not in log and "abc123" not in log and "xyz789" not in log
+
+
+def test_committed_file_is_compared_with_its_version_before_the_commit(project):
+    check(project)
+    project.git("add", "app.py")
+    project.git("commit", "-q", "-m", "app")
+    project.write("app.py", "TIMEOUT = 60\n")  # edited again after the commit: not part of the commit
+    flagged, _, _ = check(project)
+    app = flagged[0]
+    assert app.path == "app.py" and app.kind == "modified"
+    assert "-TIMEOUT = 30" in app.diff and "+TIMEOUT = 1440" in app.diff
+
+
+def test_risky_scores_committed_files(repo, monkeypatch, capsys):
+    repo.write("auth/tokens.py", "TTL = 5\n")
+    repo.write("notes.py", "x = 1\n")
+    repo.commit("start")
+    monkeypatch.chdir(repo.root)
+    main(["hook", "start"])
+    repo.write("auth/tokens.py", "TTL = 50\n")
+    repo.git("add", "auth/tokens.py")
+    repo.git("commit", "-q", "-m", "tokens")
+    repo.write("notes.py", "x = 2\n")
+    commit = git.head_commit(repo.root)
+    capsys.readouterr()
+
+    def risky():
+        main(["risky"])
+        out = capsys.readouterr().out
+        main_table, _, committed = out.partition("Committed (lineup can't roll these back; use git to undo them)")
+        return main_table, committed
+
+    for _ in range(2):  # shown on every run, not just the first
+        main_table, committed = risky()
+        assert "notes.py" in main_table and "auth/tokens.py" not in main_table
+        tokens = next(line for line in committed.splitlines() if "auth/tokens.py" in line)
+        assert commit[:7] in tokens and "HIGH" in tokens and "auth or payment file changed" in tokens
+
+    table = store.load_table(repo.root)
+    assert table["files"]["auth/tokens.py"]["status"] == "committed"
+    assert table["committed"] == [{"commit": commit, "path": "auth/tokens.py", "risk": "HIGH",
+                                   "reasons": ["auth or payment file changed"]}]
+    assert "TTL" not in json.dumps(table)  # no code saved
+
+    main(["hook", "start", "--fresh"])  # a fresh photo clears them
+    capsys.readouterr()
+    assert "Committed" not in risky()[1] and "auth/tokens.py" not in "".join(risky())
 
 
 def test_diff_shows_committed_files(project, monkeypatch, capsys):

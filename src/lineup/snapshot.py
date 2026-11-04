@@ -3,7 +3,7 @@
 from datetime import datetime
 from pathlib import Path
 
-from lineup import changes, git, store
+from lineup import changes, git, rules, store
 from lineup.guard import is_private, private_pathspecs
 
 
@@ -70,17 +70,22 @@ def summary(table):
 def check_commits(root, table):
     """Files in commits made since the last check: flag them first, then take them off the undo list.
 
-    Returns [(path, file kind)] of the flagged files.
+    Returns the flagged files as changes, each compared with its version before the commits.
     """
     head = git.head_commit(root)
     last = table["last_seen_commit"]
     if not head or head == last:
         return []
 
-    flagged = [(path, changes.file_kind(path)) for path in git.files_between(root, last, head)]
-    for path, kind in flagged:  # 1. flag first
-        store.log(root, f"commit {head[:7]}: {path} ({kind}) flagged")
-    for path, _ in flagged:  # 2. then off the undo list
+    flagged = changes.committed_changes(root, last, head)
+    for change in flagged:  # 1. flag first: score it and keep the score (names and reasons only, no code)
+        flags = sorted(rules.rules_for(change, flagged, root), key=lambda f: -rules.LEVELS[f[0]])
+        table.setdefault("committed", []).append({
+            "commit": head, "path": change.path, "risk": rules.score(flags),
+            "reasons": [reason for _, reason in flags],
+        })
+        store.log(root, f"commit {head[:7]}: {change.path} ({change.file_kind}) flagged {rules.score(flags)}")
+    for path in git.files_between(root, last, head):  # 2. then off the undo list
         row = table["files"].get(path, {})
         if row.get("copy"):
             store.delete_copy(root, path)

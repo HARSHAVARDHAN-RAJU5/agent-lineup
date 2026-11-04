@@ -39,19 +39,20 @@ def _hook(args):
 
 
 def _collect(root):
-    """Shared by diff and risky: flag new commits, find changes, give IDs. Returns (table, found, label)."""
+    """Shared by diff and risky: flag new commits, find changes, give IDs.
+
+    Returns (table, found, committed, label). `committed` are files in new commits.
+    """
     if store.has_snapshot(root):
         table = store.load_table(root)
-        flagged = snapshot.check_commits(root, table)
-        if flagged:
-            names = ", ".join(f"{path} ({kind})" for path, kind in flagged)
-            print(f"Committed since last check: {names}\n")
+        committed = snapshot.check_commits(root, table)
         found = changes.find_changes(root, table)
         snapshot.record_check(root, table, found)
-        return table, found, f"photo taken {table['taken_at']} at {_commit_label(table['start_commit'])}"
+        label = f"photo taken {table['taken_at']} at {_commit_label(table['start_commit'])}"
+        return table, found, committed, label
     found = changes.find_changes(root)
     head = git.head_commit(root)
-    return None, found, f"last commit {head[:7]}" if head else "an empty repo (no commits yet)"
+    return None, found, [], f"last commit {head[:7]}" if head else "an empty repo (no commits yet)"
 
 
 def _no_photo(root):
@@ -65,7 +66,10 @@ def _diff(args):
     root = _root()
     if root is None:
         return 2
-    table, found, label = _collect(root)
+    table, found, committed, label = _collect(root)
+    if committed:
+        names = ", ".join(f"{c.path} ({c.file_kind})" for c in committed)
+        print(f"Committed since last check: {names}\n")
     if found:
         print(changes.format_groups(changes.sort_into_groups(found), label), end="")
     else:
@@ -86,29 +90,46 @@ def _other(change):
     return ", ".join(notes)
 
 
+def _why(reasons):
+    return "\n".join(reason if i == 0 else f"+ {reason}" for i, reason in enumerate(reasons))
+
+
 def risky_rows(root, table, found):
     """[(id, path, level, why, other)], HIGH first, then by ID."""
     rows = []
     for change in found:
         flags = sorted(rules.rules_for(change, found, root), key=lambda f: -rules.LEVELS[f[0]])
-        why = "\n".join(reason if i == 0 else f"+ {reason}" for i, (_, reason) in enumerate(flags))
         row_id = table["files"][change.path]["id"] if table else "-"
-        rows.append((row_id, change.path, rules.score(flags), why, _other(change)))
+        rows.append((row_id, change.path, rules.score(flags), _why([r for _, r in flags]), _other(change)))
     rows.sort(key=lambda r: (-rules.LEVELS[r[2]], r[0] if isinstance(r[0], int) else 0, r[1]))
     return rows
+
+
+def committed_rows(table):
+    """Saved scores of files in commits since the photo: [(commit, path, level, why)], HIGH first."""
+    saved = (table or {}).get("committed", [])
+    rows = [(c["commit"][:7], c["path"], c["risk"], _why(c["reasons"])) for c in saved]
+    return sorted(rows, key=lambda r: -rules.LEVELS[r[2]])  # stable: same level keeps commit order
 
 
 def _risky(args):
     root = _root()
     if root is None:
         return 2
-    table, found, label = _collect(root)
+    table, found, _, label = _collect(root)
+    committed = committed_rows(table)
+    if not found and not committed:
+        print(f"lineup risky: no changes since the {'photo' if table else 'last commit'}")
+    else:
+        print(f"lineup risky (compared with {label})\n")
     if found:
         rows = risky_rows(root, table, found)
-        body = tables.draw(("ID", "File", "Risk", "Why (rule)", "Other"), [[r] for r in rows], (4, 40, 4, 50, 20))
-        print(f"lineup risky (compared with {label})\n\n{body}", end="")
-    else:
-        print(f"lineup risky: no changes since the {'photo' if table else 'last commit'}")
+        print(tables.draw(("ID", "File", "Risk", "Why (rule)", "Other"), [[r] for r in rows], (4, 40, 4, 50, 20)), end="")
+    elif committed:
+        print("No uncommitted changes since the photo.")
+    if committed:
+        print("\nCommitted (lineup can't roll these back; use git to undo them)\n")
+        print(tables.draw(("Commit", "File", "Risk", "Why (rule)"), [[r] for r in committed], (7, 40, 4, 50)), end="")
     if table is None:
         _no_photo(root)
     return 0

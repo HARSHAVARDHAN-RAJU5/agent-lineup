@@ -86,20 +86,25 @@ def fingerprint(file):
     return digest.hexdigest()
 
 
-def _build(root, path, kind, old_size, load_old):
-    """Compare the before and after of one file. Returns None if nothing really changed."""
+def _build(root, path, kind, old_size, load_old, new_size=None, load_new=None):
+    """Compare the before and after of one file. Returns None if nothing really changed.
+
+    The "after" is the file on disk, unless `new_size` and `load_new` give another version.
+    """
     change = Change(path=path, kind=kind, file_kind=file_kind(path))
     if change.file_kind == "private":
         change.private = True
         return change  # never read a private file
     file = Path(root, path)
-    new_size = file.stat().st_size if kind != "deleted" else 0
+    if new_size is None:
+        new_size = file.stat().st_size if kind != "deleted" else 0
+        load_new = file.read_bytes
     if max(old_size, new_size) > BIG_FILE_BYTES:
         change.big = True
         return change
 
     old = (load_old() or b"") if kind != "added" else b""
-    new = file.read_bytes() if kind != "deleted" else b""
+    new = (load_new() or b"") if kind != "deleted" else b""
     if kind == "modified" and old == new:
         return None
     if _is_binary(old) or _is_binary(new):
@@ -159,6 +164,21 @@ def _compare(root, base, row, path):
     if not kind:
         return None
     return _build(root, path, kind, old_size or 0, lambda: git.show_file(root, rev, path))
+
+
+def committed_changes(root, old, new):
+    """Files changed by the commits between `old` and `new`, each compared with its version at `old`."""
+    found = []
+    for path in git.files_between(root, old, new):
+        old_size, new_size = git.blob_size(root, old, path), git.blob_size(root, new, path)
+        kind = _kind(old_size is not None, new_size is not None)
+        if not kind:
+            continue
+        change = _build(root, path, kind, old_size or 0, lambda p=path: git.show_file(root, old, p),
+                        new_size or 0, lambda p=path: git.show_file(root, new, p))
+        if change:
+            found.append(change)
+    return found
 
 
 def find_changes(root, table=None):
