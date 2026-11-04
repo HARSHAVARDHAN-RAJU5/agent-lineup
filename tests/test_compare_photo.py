@@ -129,3 +129,37 @@ def test_diff_without_photo_takes_one(project, monkeypatch, capsys):
     second = capsys.readouterr().out
     assert "no changes since the photo" in second
     assert "Tracking from now on." not in second
+
+
+# ---- private files inside a fully ignored folder ----
+
+def test_env_in_ignored_folder_is_flagged(repo):
+    repo.write(".gitignore", "config/\n")
+    repo.commit()
+    repo.write("config/.env", "SECRET_KEY=abc123\n")
+    table = snapshot.take(repo.root)
+    assert table["files"]["config/.env"]["at_start"] == "private"
+    assert store.read_copy(repo.root, "config/.env") is None  # fingerprint only, never copied
+
+    repo.write("config/.env", "SECRET_KEY=xyz789\n")
+    env = by_path(find_changes(repo.root, table))["config/.env"]
+    assert env.private and env.kind == "modified" and env.diff == ""
+
+
+def test_key_added_in_ignored_folder_after_photo_is_flagged(repo):
+    repo.write(".gitignore", "keys/\n")
+    repo.commit()
+    table = snapshot.take(repo.root)
+    repo.write("keys/server.pem", "-----BEGIN PRIVATE KEY-----\nsecret\n")
+    pem = by_path(find_changes(repo.root, table))["keys/server.pem"]
+    assert pem.private and pem.kind == "added" and pem.diff == ""
+    out = changes.format_groups(changes.sort_into_groups([pem]), "test")
+    assert "keys/server.pem" in out and "secret" not in out.replace("contents not read", "")
+
+
+def test_normal_files_in_ignored_folders_still_skipped(repo):
+    repo.write(".gitignore", "node_modules/\n")
+    repo.commit()
+    table = snapshot.take(repo.root)
+    repo.write("node_modules/lib/index.js", "x\n")
+    assert find_changes(repo.root, table) == []

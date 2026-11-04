@@ -21,3 +21,8 @@ def is_private(path):
     if any(fnmatch.fnmatchcase(name, p) for p in SAFE_NAMES):
         return False
     return any(fnmatch.fnmatchcase(name, p) for p in PRIVATE_NAMES)
+
+
+def private_pathspecs():
+    """PRIVATE_NAMES as git patterns (any folder, any case), so git can pre-filter by the same list."""
+    return [f":(glob,icase)**/{p}" for p in PRIVATE_NAMES]

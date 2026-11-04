@@ -84,7 +84,12 @@ def files_between(root, old, new):
     return _split_z(out)
 
 
-def ignored_files(root):
-    """Files hidden by .gitignore. A hidden folder shows once, as `name/`."""
-    out = _run(["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"], root).stdout
-    return _split_z(out)
+def ignored_files(root, only=None):
+    """Files hidden by .gitignore, including files inside hidden folders (names only).
+
+    `only` is a list of git patterns; when given, git returns just the matching names.
+    """
+    args = ["ls-files", "--others", "--ignored", "--exclude-standard", "-z"]
+    if only:
+        args += ["--", *only]
+    return _split_z(_run(args, root).stdout)

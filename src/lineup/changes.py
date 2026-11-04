@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from lineup import functions, git, store
-from lineup.guard import is_private
+from lineup.guard import is_private, private_pathspecs
 
 BIG_FILE_BYTES = 10 * 1024 * 1024
 
@@ -172,7 +172,7 @@ def find_changes(root, table=None):
     paths.update(git.untracked_files(root))
     paths.update(rows)
     if table:  # a hidden private file created after the photo
-        paths.update(p for p in git.ignored_files(root) if not p.endswith("/") and is_private(p))
+        paths.update(p for p in git.ignored_files(root, private_pathspecs()) if is_private(p))
 
     found = []
     for path in sorted(paths):

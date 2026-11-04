@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from lineup import changes, git, store
-from lineup.guard import is_private
+from lineup.guard import is_private, private_pathspecs
 
 
 def _row(root, path):
@@ -36,8 +36,8 @@ def take(root, keep=False):
     not_committed = [path for _, path in git.changed_files(root, base)] + git.untracked_files(root)
     for path in sorted(set(not_committed)):
         files[path] = _row(root, path)
-    for path in git.ignored_files(root):
-        if not path.endswith("/") and is_private(path):
+    for path in git.ignored_files(root, private_pathspecs()):  # names only: private ones get a fingerprint
+        if is_private(path):
             files[path] = _row(root, path)
 
     table = {
