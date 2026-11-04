@@ -3,7 +3,8 @@
 import argparse
 import sys
 
-from lineup import __version__, changes, git, snapshot, store
+from lineup import __version__, changes, git, rules, snapshot, store
+from lineup import table as tables
 
 
 def _not_built(args):
@@ -37,10 +38,8 @@ def _hook(args):
     return 0
 
 
-def _diff(args):
-    root = _root()
-    if root is None:
-        return 2
+def _collect(root):
+    """Shared by diff and risky: flag new commits, find changes, give IDs. Returns (table, found, label)."""
     if store.has_snapshot(root):
         table = store.load_table(root)
         flagged = snapshot.check_commits(root, table)
@@ -49,22 +48,69 @@ def _diff(args):
             print(f"Committed since last check: {names}\n")
         found = changes.find_changes(root, table)
         snapshot.record_check(root, table, found)
-        label = f"photo taken {table['taken_at']} at {_commit_label(table['start_commit'])}"
-    else:
-        table = None
-        found = changes.find_changes(root)
-        head = git.head_commit(root)
-        label = f"last commit {head[:7]}" if head else "an empty repo (no commits yet)"
+        return table, found, f"photo taken {table['taken_at']} at {_commit_label(table['start_commit'])}"
+    found = changes.find_changes(root)
+    head = git.head_commit(root)
+    return None, found, f"last commit {head[:7]}" if head else "an empty repo (no commits yet)"
 
+
+def _no_photo(root):
+    """No photo yet: take one now so the next check is exact."""
+    snapshot.take(root)
+    print("\nNo snapshot from the session start. These changes may include your own edits, "
+          "and they can't be rolled back. Tracking from now on.")
+
+
+def _diff(args):
+    root = _root()
+    if root is None:
+        return 2
+    table, found, label = _collect(root)
     if found:
         print(changes.format_groups(changes.sort_into_groups(found), label), end="")
     else:
         print(f"lineup diff: no changes since the {'photo' if table else 'last commit'}")
+    if table is None:
+        _no_photo(root)
+    return 0
 
-    if table is None:  # no photo yet: take one now so the next check is exact
-        snapshot.take(root)
-        print("\nNo snapshot from the session start. These changes may include your own edits, "
-              "and they can't be rolled back. Tracking from now on.")
+
+def _other(change):
+    notes = []
+    if change.kind == "added":
+        notes.append("New")
+    if change.kind == "deleted":
+        notes.append("Deleted")
+    if change.private or change.big:
+        notes.append("Can't roll back")
+    return ", ".join(notes)
+
+
+def risky_rows(root, table, found):
+    """[(id, path, level, why, other)], HIGH first, then by ID."""
+    rows = []
+    for change in found:
+        flags = sorted(rules.rules_for(change, found, root), key=lambda f: -rules.LEVELS[f[0]])
+        why = "\n".join(reason if i == 0 else f"+ {reason}" for i, (_, reason) in enumerate(flags))
+        row_id = table["files"][change.path]["id"] if table else "-"
+        rows.append((row_id, change.path, rules.score(flags), why, _other(change)))
+    rows.sort(key=lambda r: (-rules.LEVELS[r[2]], r[0] if isinstance(r[0], int) else 0, r[1]))
+    return rows
+
+
+def _risky(args):
+    root = _root()
+    if root is None:
+        return 2
+    table, found, label = _collect(root)
+    if found:
+        rows = risky_rows(root, table, found)
+        body = tables.draw(("ID", "File", "Risk", "Why (rule)", "Other"), [[r] for r in rows], (4, 40, 4, 50, 20))
+        print(f"lineup risky (compared with {label})\n\n{body}", end="")
+    else:
+        print(f"lineup risky: no changes since the {'photo' if table else 'last commit'}")
+    if table is None:
+        _no_photo(root)
     return 0
 
 
@@ -78,7 +124,7 @@ def build_parser():
 
     sub.add_parser("init", help="install the session hooks in this repo").set_defaults(func=_not_built)
     sub.add_parser("diff", help="show what changed since the snapshot").set_defaults(func=_diff)
-    sub.add_parser("risky", help="score each change HIGH / MED / LOW").set_defaults(func=_not_built)
+    sub.add_parser("risky", help="score each change HIGH / MED / LOW").set_defaults(func=_risky)
 
     rollback = sub.add_parser("rollback", help="undo one or more files by ID")
     rollback.add_argument("ids", nargs="+", type=int, help="file IDs from `lineup risky`")
