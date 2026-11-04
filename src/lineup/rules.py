@@ -91,6 +91,12 @@ _SKIP = re.compile(
     r"|\b(?:it|test|describe)\.skip\s*\(|\bx(?:it|test|describe)\s*\(|\bt\.Skip(?:Now|f)?\s*\("
 )
 _TEST_PARTS = re.compile(r"^test_|_test$|\.(?:test|spec)$")
+_COMMENT = ("#", "//", "/*", "*")
+
+
+def _is_assert(line):
+    """An assertion line. A commented-out one (# assert x) doesn't count, so commenting it out = removing it."""
+    return not line.lstrip().startswith(_COMMENT) and bool(_ASSERT.search(line))
 
 
 def _stem(path):
@@ -122,8 +128,8 @@ def test_rules(change, all_changes):
     removed = [line[1:] for line in lines if line.startswith("-")]
     added = [line[1:] for line in lines if line.startswith("+")]
 
-    asserts_removed = sum(1 for line in removed if _ASSERT.search(line))
-    asserts_added = sum(1 for line in added if _ASSERT.search(line))
+    asserts_removed = sum(1 for line in removed if _is_assert(line))
+    asserts_added = sum(1 for line in added if _is_assert(line))
     if asserts_removed > asserts_added:
         flags.append(("HIGH", "assertion removed"))
     if any(_SKIP.search(line) for line in added):

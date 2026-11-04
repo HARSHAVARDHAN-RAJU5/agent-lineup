@@ -273,3 +273,20 @@ def test_big_new_file_or_no_test_is_not_breakage():
 def test_breakage_only_for_normal_code():
     doc = change("docs/guide.md", lines_removed=50)
     assert rules.breakage_rules(doc, [doc]) == []
+
+
+@pytest.mark.parametrize("old, new", [
+    ("    assert total() == 118", "    # assert total() == 118"),
+    ("  expect(total()).toBe(118);", "  // expect(total()).toBe(118);"),
+    ("  expect(total()).toBe(118);", "  /* expect(total()).toBe(118); */"),
+])
+def test_commented_out_assertion_is_removed(old, new):
+    c = change("tests/test_cart.py", diff=f"--- a\n+++ b\n@@ -1 +1 @@\n-{old}\n+{new}")
+    flags = rules.test_rules(c, [c])
+    assert ("HIGH", "assertion removed") in flags
+
+
+def test_comment_next_to_an_assertion_is_still_an_edit():
+    c = change("tests/test_cart.py",
+               diff="--- a\n+++ b\n@@ -1 +1,2 @@\n+    # check the total\n     assert total() == 118")
+    assert rules.test_rules(c, [c]) == [("MED", "test edited")]
