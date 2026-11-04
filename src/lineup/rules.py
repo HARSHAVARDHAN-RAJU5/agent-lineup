@@ -173,9 +173,32 @@ def function_rules(change, all_changes, root=None):
     return flags
 
 
+# ---- possible breakage (a guess, always MED) ----
+
+BREAKAGE_MIN_REMOVED = 10
+BREAKAGE_RATIO = 3
+SMALL_NEW_FILE = 10
+
+
+def breakage_rules(change, all_changes):
+    """Working code removed for a small fix, or a small new file added next to a test."""
+    if change.file_kind != "code":
+        return []
+    removed, added = change.lines_removed, change.lines_added
+    if change.kind == "modified" and removed >= BREAKAGE_MIN_REMOVED and removed >= BREAKAGE_RATIO * added:
+        return [("MED", f"possible breakage: {removed} lines removed, {added} added")]
+    if change.kind == "added" and added <= SMALL_NEW_FILE:
+        name = _stem(change.path)
+        tests = [c.path for c in all_changes if c.file_kind == "test" and code_name(c.path) == name]
+        if tests:
+            return [("MED", f"possible breakage: small new file next to {', '.join(tests)}")]
+    return []
+
+
 def rules_for(change, all_changes, root=None):
     """Every rule one change matches. `root` lets the deleted-function check search the repo."""
-    return file_rules(change) + test_rules(change, all_changes) + function_rules(change, all_changes, root)
+    return (file_rules(change) + test_rules(change, all_changes)
+            + function_rules(change, all_changes, root) + breakage_rules(change, all_changes))
 
 
 def score(flags):

@@ -233,3 +233,43 @@ def test_dunder_names_are_skipped(repo):
     repo.write("a.py", "class A:\n    pass\n")
     found = find_changes(repo.root)
     assert rules.function_rules(found[0], found, repo.root) == []
+
+
+# ---- possible breakage (step 4) ----
+
+def test_code_removed_for_a_small_fix():
+    c = change("orders.py", lines_removed=25, lines_added=2)
+    assert ("MED", "possible breakage: 25 lines removed, 2 added") in rules.rules_for(c, [c])
+
+
+@pytest.mark.parametrize("removed, added", [(25, 20), (9, 0), (10, 4)])
+def test_normal_edits_are_not_breakage(removed, added):
+    c = change("orders.py", lines_removed=removed, lines_added=added)
+    assert rules.breakage_rules(c, [c]) == []
+
+
+def test_edge_of_the_numbers():
+    c = change("orders.py", lines_removed=10, lines_added=3)  # 10 >= 10 and 10 >= 9
+    assert rules.breakage_rules(c, [c]) != []
+
+
+def test_small_new_file_next_to_a_test():
+    code = change("utils/cache.py", "added", lines_added=3)
+    test = change("tests/test_cache.py")
+    assert rules.breakage_rules(code, [code, test]) == [
+        ("MED", "possible breakage: small new file next to tests/test_cache.py")]
+    assert score(rules.rules_for(code, [code, test])) == "MED"
+
+
+def test_big_new_file_or_no_test_is_not_breakage():
+    big = change("utils/cache.py", "added", lines_added=80)
+    small = change("utils/cache.py", "added", lines_added=3)
+    test = change("tests/test_cache.py")
+    other_test = change("tests/test_orders.py")
+    assert rules.breakage_rules(big, [big, test]) == []
+    assert rules.breakage_rules(small, [small, other_test]) == []
+
+
+def test_breakage_only_for_normal_code():
+    doc = change("docs/guide.md", lines_removed=50)
+    assert rules.breakage_rules(doc, [doc]) == []
