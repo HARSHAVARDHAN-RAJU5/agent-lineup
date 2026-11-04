@@ -3,6 +3,9 @@
 import posixpath
 import re
 
+from lineup import git
+from lineup.guard import private_pathspecs
+
 LEVELS = {"LOW": 1, "MED": 2, "HIGH": 3}
 
 INSTALL_SCRIPTS = {"setup.py", "install.sh", "install.ps1"}
@@ -136,9 +139,43 @@ def test_rules(change, all_changes):
     return flags
 
 
-def rules_for(change, all_changes):
-    """Every rule one change matches: file rules plus test rules."""
-    return file_rules(change) + test_rules(change, all_changes)
+# ---- deleted functions ----
+
+def added_in(all_changes):
+    """Where each function name was added in this change: {name: [paths]}."""
+    found = {}
+    for c in all_changes:
+        if c.kind != "deleted":
+            for name in c.funcs_added:
+                found.setdefault(name, []).append(c.path)
+    return found
+
+
+def function_rules(change, all_changes, root=None):
+    """Deleted functions in a non-test file: moved (LOW), still used (HIGH) or just deleted (LOW)."""
+    if change.file_kind == "test" or change.kind == "added":
+        return []
+    flags = []
+    moved_to = added_in(all_changes)
+    for name in change.funcs_removed:
+        if name.startswith("__") and name.endswith("__"):
+            continue  # __init__ and friends exist in every class
+        elsewhere = [p for p in moved_to.get(name, []) if p != change.path]
+        if elsewhere:
+            flags.append(("LOW", f"function moved: {name} ({change.path} -> {', '.join(elsewhere)})"))
+            continue
+        users = git.files_using(root, name, exclude=private_pathspecs()) if root else []
+        if users:
+            shown = ", ".join(users[:3]) + (", ..." if len(users) > 3 else "")
+            flags.append(("HIGH", f"function deleted but still used: {name} ({shown})"))
+        else:
+            flags.append(("LOW", f"function deleted: {name}"))
+    return flags
+
+
+def rules_for(change, all_changes, root=None):
+    """Every rule one change matches. `root` lets the deleted-function check search the repo."""
+    return file_rules(change) + test_rules(change, all_changes) + function_rules(change, all_changes, root)
 
 
 def score(flags):

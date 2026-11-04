@@ -184,3 +184,52 @@ def test_normal_code_never_gets_test_rules():
     c = change("notes.py")
     assert rules.test_rules(c, [c]) == []
     assert score(rules.rules_for(c, [c])) == "LOW"
+
+
+# ---- deleted functions (step 3) ----
+
+@pytest.fixture
+def login_code(repo):
+    repo.write("auth/session.py",
+               "def refresh_token():\n    pass\n\ndef old_login():\n    pass\n\ndef parse_date():\n    pass\n")
+    repo.write("api/routes.py", "from auth.session import old_login\n\nold_login()\n")
+    repo.write(".env", "old_login=secret\n")
+    repo.commit()
+    return repo
+
+
+def scored_with_root(repo):
+    found = find_changes(repo.root)
+    return {c.path: [f for f in rules.rules_for(c, found, repo.root)] for c in found}
+
+
+def test_moved_still_used_and_just_deleted(login_code):
+    login_code.write("auth/session.py", "# empty now\n")
+    login_code.write("auth/tokens.py", "def refresh_token():\n    pass\n")
+    flags = scored_with_root(login_code)["auth/session.py"]
+    assert ("LOW", "function moved: refresh_token (auth/session.py -> auth/tokens.py)") in flags
+    assert ("HIGH", "function deleted but still used: old_login (api/routes.py)") in flags
+    assert ("LOW", "function deleted: parse_date") in flags
+    assert score(flags) == "HIGH"
+
+
+def test_private_files_are_not_searched(login_code):
+    login_code.write("api/routes.py", "# no callers left\n")
+    login_code.write("auth/session.py", "def refresh_token():\n    pass\n\ndef parse_date():\n    pass\n")
+    flags = scored_with_root(login_code)["auth/session.py"]
+    assert flags[-1] == ("LOW", "function deleted: old_login")  # .env has the word, but isn't searched
+
+
+def test_whole_file_deleted_with_used_function(login_code):
+    (login_code.root / "auth/session.py").unlink()
+    flags = scored_with_root(login_code)["auth/session.py"]
+    assert ("HIGH", "function deleted but still used: old_login (api/routes.py)") in flags
+
+
+def test_dunder_names_are_skipped(repo):
+    repo.write("a.py", "class A:\n    def __init__(self):\n        pass\n")
+    repo.write("b.py", "class B:\n    def __init__(self):\n        pass\n")
+    repo.commit()
+    repo.write("a.py", "class A:\n    pass\n")
+    found = find_changes(repo.root)
+    assert rules.function_rules(found[0], found, repo.root) == []

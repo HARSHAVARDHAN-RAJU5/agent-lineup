@@ -84,6 +84,17 @@ def files_between(root, old, new):
     return _split_z(out)
 
 
+def files_using(root, word, exclude=()):
+    """Files (tracked or new) that contain `word` as a whole word. Names only, never the lines.
+
+    `exclude` is a list of git patterns for files that must not be searched.
+    """
+    args = ["grep", "-l", "-w", "-F", "-I", "--untracked", "-z", "-e", word, "--", "."]
+    args += [f":(exclude,{p[2:]}" if p.startswith(":(") else f":(exclude){p}" for p in exclude]
+    result = _run(args, root, check=False)
+    return _split_z(result.stdout) if result.returncode == 0 else []
+
+
 def ignored_files(root, only=None):
     """Files hidden by .gitignore, including files inside hidden folders (names only).
 
