@@ -112,4 +112,24 @@ def record_check(root, table, found):
     table["last_check"] = datetime.now().strftime("%Y-%m-%d %H:%M")
     store.save_table(root, table)
     names = ", ".join(c.path for c in found)
-    store.log(root, f"checked: {len(found)} files changed ({names})" if found else "checked: no changes")
+    word = "file" if len(found) == 1 else "files"
+    store.log(root, f"checked: {len(found)} {word} changed ({names})" if found else "checked: no changes")
+
+
+def start_session(root, fresh=False):
+    """A new session or /clear. Returns (table, number of earlier uncommitted files kept).
+
+    If the old photo still has uncommitted changes, keep it so they stay flagged and can be
+    rolled back. Otherwise (or with fresh=True) take a new photo.
+    """
+    if fresh or not store.has_snapshot(root):
+        return take(root), 0
+    table = store.load_table(root)
+    check_commits(root, table)
+    found = changes.find_changes(root, table)
+    if not found:
+        return take(root), 0
+    record_check(root, table, found)
+    word = "file" if len(found) == 1 else "files"
+    store.log(root, f"new session: kept earlier snapshot, {len(found)} uncommitted {word}")
+    return table, len(found)

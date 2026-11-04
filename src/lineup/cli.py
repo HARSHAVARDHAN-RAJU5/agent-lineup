@@ -27,8 +27,13 @@ def _hook(args):
     root = _root()
     if root is None:
         return 2
-    table = snapshot.take(root)
-    print(f"lineup: photo taken at {_commit_label(table['start_commit'])} ({snapshot.summary(table)})")
+    table, kept = snapshot.start_session(root, fresh=args.fresh)
+    if kept:
+        word = "file" if kept == 1 else "files"
+        print(f"Keeping the earlier snapshot: {kept} uncommitted {word} from before this session. "
+              "Some may be your own edits. Commit them, or run lineup hook start --fresh to start over.")
+    else:
+        print(f"lineup: photo taken at {_commit_label(table['start_commit'])} ({snapshot.summary(table)})")
     return 0
 
 
@@ -58,7 +63,8 @@ def _diff(args):
 
     if table is None:  # no photo yet: take one now so the next check is exact
         snapshot.take(root)
-        print("\nlineup: no photo existed, so one was taken now. Next check shows only new changes.")
+        print("\nNo snapshot from the session start. These changes may include your own edits, "
+              "and they can't be rolled back. Tracking from now on.")
     return 0
 
 
@@ -80,6 +86,7 @@ def build_parser():
 
     hook = sub.add_parser("hook", help="run by the agent's hooks (start: take the photo)")
     hook.add_argument("event", choices=["start"])
+    hook.add_argument("--fresh", action="store_true", help="always take a new photo")
     hook.set_defaults(func=_hook)
 
     return parser

@@ -122,10 +122,10 @@ def test_diff_without_photo_takes_one(project, monkeypatch, capsys):
     first = capsys.readouterr().out
     assert "compared with last commit" in first
     assert "+2 -0" in first  # line A and line B together: can't tell them apart yet
-    assert "one was taken now" in first
+    assert "Tracking from now on." in first
     assert store.has_snapshot(project.root)
 
     assert main(["diff"]) == 0
     second = capsys.readouterr().out
     assert "no changes since the photo" in second
-    assert "one was taken now" not in second
+    assert "Tracking from now on." not in second
