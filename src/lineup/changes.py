@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from lineup import functions, git, store
+from lineup import functions, git, store, table
 from lineup.guard import is_private, private_pathspecs
 
 BIG_FILE_BYTES = 10 * 1024 * 1024
@@ -225,15 +225,11 @@ def sort_into_groups(changes):
     return groups
 
 
-def format_groups(groups, base_label):
-    lines = [f"lineup diff (compared with {base_label})", ""]
-    width = max((len(name) for items in groups.values() for name, _ in items), default=0)
-    width = min(max(width, 10), 40)
+def format_groups(groups, base_label, box=None):
+    """The groups as one table: Group | Name | What, with a line between groups."""
+    blocks = []
     for title, items in groups.items():
-        lines.append(title)
-        if not items:
-            lines.append("  nothing")
-        for name, what in items:
-            lines.append(f"  {name:<{width}}  {what}")
-        lines.append("")
-    return "\n".join(lines).rstrip() + "\n"
+        rows = items or [("nothing", "")]
+        blocks.append([(title if i == 0 else "", name, what) for i, (name, what) in enumerate(rows)])
+    body = table.draw(("Group", "Name", "What"), blocks, (9, 40, 50), box)
+    return f"lineup diff (compared with {base_label})\n\n{body}"
