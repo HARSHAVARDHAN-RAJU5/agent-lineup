@@ -1,6 +1,7 @@
 """Scores each change HIGH, MED or LOW with fixed rules. Same change, same score; no AI here."""
 
 import posixpath
+import re
 
 LEVELS = {"LOW": 1, "MED": 2, "HIGH": 3}
 
@@ -65,17 +66,79 @@ def file_rules(change):
         flags.append(("LOW", "lockfile changed"))
     if kind == "docs":
         flags.append(("LOW", "docs changed"))
-    if change.kind == "added" and not flags:
+    if change.kind == "added" and kind != "test" and not flags:
         flags.append(("LOW", "new file"))
     if change.kind == "modified" and kind == "code":
         flags.append(("LOW", "code edited"))
     if change.kind != "deleted":
+        word = "test added" if kind == "test" else "function added"
         for name in change.funcs_added:
-            flags.append(("LOW", f"function added: {name}"))
+            flags.append(("LOW", f"{word}: {name}"))
 
-    if not flags:
+    if not flags and kind != "test":  # test files always get a test rule below
         flags.append(("LOW", "changed"))
     return flags
+
+
+# ---- test files ----
+
+_ASSERT = re.compile(r"\bassert\w*\b|\bexpect\s*\(|\bt\.(?:Error|Errorf|Fatal|Fatalf)\s*\(")
+_SKIP = re.compile(
+    r"pytest\.mark\.skip|pytest\.skip\s*\(|unittest\.skip|\.skipTest\s*\("
+    r"|\b(?:it|test|describe)\.skip\s*\(|\bx(?:it|test|describe)\s*\(|\bt\.Skip(?:Now|f)?\s*\("
+)
+_TEST_PARTS = re.compile(r"^test_|_test$|\.(?:test|spec)$")
+
+
+def _stem(path):
+    """File name without folders and extension: tests/test_auth.py -> test_auth."""
+    return posixpath.splitext(posixpath.basename(path))[0].lower()
+
+
+def code_name(test_path):
+    """The code file a test belongs to, by name: test_auth.py, auth_test.go, auth.test.js -> auth."""
+    return _TEST_PARTS.sub("", _stem(test_path))
+
+
+def linked_code(test_change, all_changes):
+    """Changed non-test files with the same name as the test's code: test_auth.py -> auth.py."""
+    name = code_name(test_change.path)
+    return [c.path for c in all_changes
+            if c.file_kind != "test" and c.path != test_change.path and _stem(c.path) == name]
+
+
+def test_rules(change, all_changes):
+    """Rules for test files only, as [(level, reason)]. Other files get []."""
+    if change.file_kind != "test":
+        return []
+    if change.kind == "deleted":
+        return [("HIGH", "test file deleted")]
+
+    flags = [("HIGH", f"test deleted: {name}") for name in change.funcs_removed]
+    lines = _changed_lines(change)
+    removed = [line[1:] for line in lines if line.startswith("-")]
+    added = [line[1:] for line in lines if line.startswith("+")]
+
+    asserts_removed = sum(1 for line in removed if _ASSERT.search(line))
+    asserts_added = sum(1 for line in added if _ASSERT.search(line))
+    if asserts_removed > asserts_added:
+        flags.append(("HIGH", "assertion removed"))
+    if any(_SKIP.search(line) for line in added):
+        flags.append(("HIGH", "skip added"))
+
+    if asserts_removed and asserts_added:  # an assert line was changed
+        code = linked_code(change, all_changes)
+        if code:
+            flags.append(("MED", f"possible weakened test, check this ({', '.join(code)} changed too)"))
+
+    if not any(level in ("HIGH", "MED") for level, _ in flags):
+        flags.append(("MED", "new test file" if change.kind == "added" else "test edited"))
+    return flags
+
+
+def rules_for(change, all_changes):
+    """Every rule one change matches: file rules plus test rules."""
+    return file_rules(change) + test_rules(change, all_changes)
 
 
 def score(flags):

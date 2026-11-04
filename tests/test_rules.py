@@ -84,3 +84,103 @@ def test_scores_real_changes_from_diff(repo):
     repo.write(".env", "SECRET_KEY=abc123\n")
     scores = {c.path: score(file_rules(c)) for c in find_changes(repo.root)}
     assert scores == {"app.py": "LOW", ".claude/settings.json": "HIGH", ".env": "HIGH"}
+
+
+# ---- test rules (step 2) ----
+
+from lineup import rules  # noqa: E402  (module import so pytest doesn't collect rules.test_rules)
+
+
+def test_code_name():
+    assert rules.code_name("tests/test_auth.py") == "auth"
+    assert rules.code_name("auth/auth_test.go") == "auth"
+    assert rules.code_name("src/auth.test.js") == "auth"
+    assert rules.code_name("src/auth.spec.ts") == "auth"
+
+
+@pytest.fixture
+def auth_repo(repo):
+    repo.write("auth.py", "TIMEOUT = 30\n")
+    repo.write("tests/test_auth.py",
+               "from auth import TIMEOUT\n\ndef test_timeout():\n    assert TIMEOUT == 30\n\n"
+               "def test_expired():\n    assert TIMEOUT > 0\n")
+    repo.commit()
+    return repo
+
+
+def scored(repo):
+    found = find_changes(repo.root)
+    out = {}
+    for c in found:
+        flags = rules.rules_for(c, found)
+        out[c.path] = (score(flags), [reason for _, reason in flags])
+    return out
+
+
+def test_assert_changed_next_to_its_code(auth_repo):
+    auth_repo.write("auth.py", "TIMEOUT = 1440\n")
+    auth_repo.write("tests/test_auth.py",
+                    "from auth import TIMEOUT\n\ndef test_timeout():\n    assert TIMEOUT == 1440\n\n"
+                    "def test_expired():\n    assert TIMEOUT > 0\n")
+    level, reasons = scored(auth_repo)["tests/test_auth.py"]
+    assert level == "MED"
+    assert reasons == ["possible weakened test, check this (auth.py changed too)"]
+
+
+def test_assert_changed_alone_is_just_a_test_edit(auth_repo):
+    auth_repo.write("tests/test_auth.py",
+                    "from auth import TIMEOUT\n\ndef test_timeout():\n    assert TIMEOUT == 31\n\n"
+                    "def test_expired():\n    assert TIMEOUT > 0\n")
+    assert scored(auth_repo)["tests/test_auth.py"] == ("MED", ["test edited"])
+
+
+def test_assertion_removed(auth_repo):
+    auth_repo.write("tests/test_auth.py",
+                    "from auth import TIMEOUT\n\ndef test_timeout():\n    pass\n\n"
+                    "def test_expired():\n    assert TIMEOUT > 0\n")
+    level, reasons = scored(auth_repo)["tests/test_auth.py"]
+    assert level == "HIGH"
+    assert "assertion removed" in reasons
+
+
+def test_skip_added(auth_repo):
+    auth_repo.write("tests/test_auth.py",
+                    "import pytest\nfrom auth import TIMEOUT\n\n@pytest.mark.skip\ndef test_timeout():\n"
+                    "    assert TIMEOUT == 30\n\ndef test_expired():\n    assert TIMEOUT > 0\n")
+    level, reasons = scored(auth_repo)["tests/test_auth.py"]
+    assert level == "HIGH"
+    assert "skip added" in reasons
+
+
+def test_test_function_deleted(auth_repo):
+    auth_repo.write("tests/test_auth.py",
+                    "from auth import TIMEOUT\n\ndef test_timeout():\n    assert TIMEOUT == 30\n")
+    level, reasons = scored(auth_repo)["tests/test_auth.py"]
+    assert level == "HIGH"
+    assert "test deleted: test_expired" in reasons
+    assert "assertion removed" in reasons
+
+
+def test_test_file_deleted(auth_repo):
+    (auth_repo.root / "tests/test_auth.py").unlink()
+    assert scored(auth_repo)["tests/test_auth.py"] == ("HIGH", ["test file deleted"])
+
+
+def test_new_test_file(auth_repo):
+    auth_repo.write("tests/test_cache.py", "def test_get():\n    assert True\n")
+    level, reasons = scored(auth_repo)["tests/test_cache.py"]
+    assert level == "MED"
+    assert reasons == ["test added: test_get", "new test file"]
+
+
+@pytest.mark.parametrize("line", ["it.skip('works', () => {})", "xit('works', () => {})",
+                                  "describe.skip('auth', () => {})", "t.Skip(\"later\")"])
+def test_skip_patterns(line):
+    c = change("src/auth.test.js", diff=f"--- a\n+++ b\n@@ -1 +1 @@\n+{line}")
+    assert "skip added" in [reason for _, reason in rules.test_rules(c, [c])]
+
+
+def test_normal_code_never_gets_test_rules():
+    c = change("notes.py")
+    assert rules.test_rules(c, [c]) == []
+    assert score(rules.rules_for(c, [c])) == "LOW"
