@@ -133,3 +133,18 @@ def test_file_kind(path, kind):
 def test_env_example_is_not_private():
     assert not is_private(".env.example")
     assert is_private(".env.production")
+
+
+@pytest.mark.parametrize("path", [
+    "auth/views.py", "auth_service.py", "src/AuthService.ts", "login.py", "LoginForm.tsx",
+    "api/oauth2.py", "OAuthClient.java", "authentication.py", "payments/stripe.py", "billing.go",
+    "checkout-page.js", "user_password_reset.py", "auth/session.py",
+])
+def test_auth_words_match(path):
+    assert file_kind(path) == "auth"
+
+
+@pytest.mark.parametrize("path", ["author.py", "authority.py", "tokenizer.py", "src/Authors.ts",
+                                  "relogin_helper.py", "passwordless_ui_kit.py"])
+def test_auth_inside_other_words_does_not_match(path):
+    assert file_kind(path) == "code"

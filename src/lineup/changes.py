@@ -41,7 +41,22 @@ _TEST_NAME = re.compile(r"(^test_.*\.py$|_test\.(py|go)$|\.(test|spec)\.[jt]sx?$
 _SCHEMA = re.compile(r"(^|/)(migrations?|alembic)/|\.sql$|(^|/)schema\.(prisma|rb|sql)$|(^|/)db/schema")
 _DOCS = re.compile(r"\.(md|rst|adoc)$|^docs?/|(^|/)(readme|changelog|license)(\.\w+)?$", re.I)
 _CONFIG = re.compile(r"\.(ya?ml|toml|ini|cfg|conf)$|(^|/)dockerfile|(^|/)docker-compose|(^|/)\.github/|(^|/)\.claude/", re.I)
-_AUTH = re.compile(r"auth|login|session|password|oauth|payment|billing|checkout", re.I)
+_AUTH_WORDS = {
+    "auth", "authn", "authz", "authenticate", "authentication", "authorize", "authorization", "oauth",
+    "login", "logins", "session", "sessions", "password", "passwords",
+    "payment", "payments", "billing", "checkout", "checkouts",
+}
+# Words in a path: split at / _ - . digits and capitals. "src/AuthService.ts" -> src, Auth, Service, ts
+_WORD = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+")
+
+
+def path_words(path):
+    return {word.lower() for word in _WORD.findall(path)}
+
+
+def is_auth(path):
+    """Whole words only: auth_service.py and AuthService.ts match, author.py and authority.py don't."""
+    return bool(path_words(path) & _AUTH_WORDS)
 
 
 def file_kind(path):
@@ -62,7 +77,7 @@ def file_kind(path):
         return "config"
     if _DOCS.search(path):
         return "docs"
-    if _AUTH.search(path):
+    if is_auth(path):
         return "auth"
     return "code"
 
