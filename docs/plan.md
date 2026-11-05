@@ -223,5 +223,5 @@ Both need the agent's session logs, which differ between Claude and Codex.
 - **Big file limit:** 10 MB per file. Revisit after testers.
 - **Output name:** "Rundown" for the combined output, with "possible breakage" as one flag inside it.
 - **Possible breakage score:** MED.
-- **Default models:** Haiku for Claude, `gpt-5.4-mini` for Codex.
+- **Default models:** Haiku for Claude. Codex uses its own default model, because a ChatGPT login rejects `gpt-5.4-mini` (found Nov 5).
 - **Hook output:** after each reply the hook shows only the fast rule-based score line. The AI runs only on `lineup diff` / `lineup risky` (answers saved). Make it automatic later, after testing.
