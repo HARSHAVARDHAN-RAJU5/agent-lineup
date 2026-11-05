@@ -74,7 +74,7 @@ def test_failures_give_a_reason(fake, monkeypatch, mode, reason):
 
 
 def test_timeout(fake, monkeypatch):
-    assert ask(fake, monkeypatch, mode="slow", timeout=1) == (None, "claude timed out")
+    assert ask(fake, monkeypatch, mode="slow", timeout=1) == (None, "timed out")
 
 
 def test_not_installed(monkeypatch):
@@ -112,3 +112,32 @@ def test_hook_start_saves_the_agent(repo, monkeypatch, capsys):
     main(["hook", "start", "--agent", "claude"])
     assert store.load_table(repo.root)["agent"] == "claude"
     assert json.dumps(store.load_table(repo.root)).count("x = 2") == 0
+
+
+PARENT_AND_CHILD = r'''
+import subprocess, sys, time
+# Like codex.cmd -> node: the agent starts a helper that keeps running in the same folder.
+subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+time.sleep(60)
+'''
+
+
+def test_timeout_stops_the_agent_and_its_helpers(tmp_path, repo, capsys, monkeypatch):
+    """The crash from the phase 4 test: a helper kept the temp folder busy and cleanup crashed."""
+    script = tmp_path / "parent.py"
+    script.write_text(PARENT_AND_CHILD, encoding="utf-8")
+    assert llm.run("x", "claude", [], command=[sys.executable, str(script)], timeout=2) == (None, "timed out")
+
+    repo.write("app.py", "x = 1\n")
+    repo.commit()
+    monkeypatch.chdir(repo.root)
+    main(["hook", "start", "--agent", "claude"])
+    repo.write("app.py", "x = 2\n")
+    monkeypatch.setitem(llm.AGENTS, "claude", ["fake-claude", str(script)])
+    monkeypatch.setattr(llm, "installed", lambda command: sys.executable if command == "fake-claude" else None)
+    monkeypatch.setattr(llm, "TIMEOUT_SECONDS", 2)
+    capsys.readouterr()
+    assert main(["diff"]) == 0
+    out = capsys.readouterr().out
+    assert "Summary unavailable: timed out." in out
+    assert "Edits" in out and "app.py" in out  # the rest still prints

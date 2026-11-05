@@ -33,6 +33,7 @@ def private_pathspecs():
 AI_LINE_LIMIT = 2000  # changed lines sent to the AI; riskiest files go first
 _ORDER = {"HIGH": 0, "MED": 1, "LOW": 2}
 _MIN_CUT = 20  # don't send a cut diff shorter than this
+CUT_MARK = "... (diff cut, too long)"
 
 
 def _name_only(change):
@@ -74,7 +75,7 @@ def ai_input(changes, scores, limit=AI_LINE_LIMIT):
                 skipped.append(change.path)
                 used = limit
                 continue
-            lines = lines[:room] + ["... (diff cut, too long)"]
+            lines = lines[:room] + [CUT_MARK]
         used += len(lines)
         items.append((change.path, level, "", "\n".join(lines)))
     return items, skipped

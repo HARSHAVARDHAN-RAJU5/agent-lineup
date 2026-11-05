@@ -49,7 +49,7 @@ def test_summary_on_top_then_groups(project, fake_claude, capsys):
     out = diff(capsys)
     text = out.out
     assert "Summary (AI guess, by claude)\n  Claude raised the timeout." in text
-    assert text.index("Summary") < text.index("What changed (AI)") < text.index("Additions")
+    assert text.index("Summary") < text.index("What changed (AI guess)") < text.index("Additions")
     rows = [line for line in text.splitlines() if "AI line for" in line or "contents not read" in line]
     assert ".env" in rows[0] and "Private, contents not read" in rows[0]  # HIGH first, then by name
     assert "auth/session.py" in rows[1] and "HIGH" in rows[1]
@@ -69,3 +69,28 @@ def test_no_agent_still_shows_the_groups(project, capsys):
     text = diff(capsys).out
     assert "Summary unavailable: claude not found" in text  # the session's agent isn't installed
     assert "Additions" in text and "notes.py" in text
+
+
+def test_cut_and_skipped_files_are_named(repo, fake_claude, capsys, monkeypatch):
+    from lineup import guard
+    monkeypatch.setattr(guard, "AI_LINE_LIMIT", 80)
+    repo.write("auth/session.py", "x = 0\n")
+    repo.write("config.yml", "a: 0\n")
+    repo.write("notes.py", "n = 0\n")
+    repo.commit()
+    monkeypatch.chdir(repo.root)
+    main(["hook", "start", "--agent", "claude"])
+    repo.write("auth/session.py", "".join(f"v{i} = {i}\n" for i in range(40)))  # HIGH, fits
+    repo.write("config.yml", "".join(f"k{i}: {i}\n" for i in range(40)))  # MED, cut
+    repo.write("notes.py", "".join(f"n{i} = {i}\n" for i in range(40)))  # LOW, skipped
+    monkeypatch.setattr(guard.ai_input, "__defaults__", (80,))
+    text = diff(capsys).out
+    assert "Not fully summarized: config.yml (diff cut, too long)." in text
+    assert "Not sent: notes.py (over the 80-line limit)." in text
+    assert "AI line for config.yml (diff cut)" in text
+
+
+def test_no_asking_line_when_the_agent_is_not_installed(project, capsys):
+    out = diff(capsys)
+    assert "Asking" not in out.err
+    assert "Summary unavailable: claude not found." in out.out

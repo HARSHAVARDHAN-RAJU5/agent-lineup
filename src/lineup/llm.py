@@ -3,8 +3,10 @@
 import json
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
+import time
 
 from lineup import store
 
@@ -74,7 +76,39 @@ def clean(data, sent_paths):
     return {"overview": overview, "files": lines}
 
 
-def run(message, agent, sent_paths, root=None, command=None, timeout=TIMEOUT_SECONDS):
+def _own_group():
+    """Start the agent in its own process group, so it and everything it starts can be stopped together."""
+    if os.name == "nt":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
+
+
+def _stop_all(proc):
+    """Stop the agent and every program it started. Never raises."""
+    try:
+        if os.name == "nt":  # /T = the whole tree; taskkill ships with Windows
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, timeout=15)
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        proc.kill()
+        proc.communicate(timeout=5)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        pass
+
+
+def _remove_quietly(folder):
+    """Delete the temp folder; if something still holds it, try again briefly, then leave it. Never raises."""
+    for _ in range(5):
+        shutil.rmtree(folder, ignore_errors=True)
+        if not os.path.exists(folder):
+            return
+        time.sleep(0.2)
+
+
+def run(message, agent, sent_paths, root=None, command=None, timeout=None):
     """Ask `agent` for a summary. Returns (summary, None) or (None, reason).
 
     `command` replaces the real agent command (used by tests). The message and reply are never logged.
@@ -98,19 +132,25 @@ def _run(message, agent, sent_paths, command, timeout):
         command = [exe, *AGENTS[agent][1:]]
 
     env = dict(os.environ, **{LOOP_GUARD: "1"})
-    with tempfile.TemporaryDirectory(prefix="lineup-") as empty:
+    empty = tempfile.mkdtemp(prefix="lineup-")
+    try:
         try:
-            result = subprocess.run(command, input=message.encode("utf-8"), cwd=empty, env=env,
-                                    capture_output=True, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            return None, f"{agent} timed out"
+            proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, cwd=empty, env=env, **_own_group())
         except OSError:
             return None, f"{agent} could not start"
-    if result.returncode != 0:
-        return None, f"{agent} failed (exit {result.returncode})"
+        try:
+            stdout, _ = proc.communicate(message.encode("utf-8"), timeout=timeout or TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            _stop_all(proc)
+            return None, "timed out"
+    finally:
+        _remove_quietly(empty)
+    if proc.returncode != 0:
+        return None, f"{agent} failed (exit {proc.returncode})"
 
     try:
-        text = _reply_text(agent, result.stdout.decode("utf-8", "replace"))
+        text = _reply_text(agent, stdout.decode("utf-8", "replace"))
         if not text:
             return None, f"{agent} failed"
         return clean(_parse_summary(text), set(sent_paths)), None

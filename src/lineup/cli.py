@@ -74,17 +74,20 @@ def _ai_summary(root, table, found):
     items, skipped = guard.ai_input(found, levels)
     agent = llm.pick_agent(table)
     if agent is None:
-        return "Summary unavailable: no agent found\n\n"
+        return "Summary unavailable: no agent found.\n\n"
+    is_installed = bool(llm.installed(llm.AGENTS[agent][0]))
 
     def say_asking():
-        print(f"Asking {agent} for a summary...", file=sys.stderr, flush=True)
+        if is_installed:  # no "Asking" line for an agent that can't be asked
+            print(f"Asking {agent} for a summary...", file=sys.stderr, flush=True)
 
     result = summary.summarize(root, items, agent, on_ask=say_asking)
     notes = {path: note for path, _, note, _ in items if note}
+    cut = [path for path, _, _, diff in items if diff.endswith(guard.CUT_MARK)]
     rows = []
     for path in sorted(levels, key=lambda p: (-rules.LEVELS[levels[p]], p)):
         if result["files"].get(path):
-            line = result["files"][path]
+            line = result["files"][path] + (" (diff cut)" if path in cut else "")
         elif path in skipped:
             line = f"not summarized ({levels[path]}, diff too big)"
         elif path in notes:
@@ -98,9 +101,16 @@ def _ai_summary(root, table, found):
         text = textwrap.fill(result["overview"], 78, initial_indent="  ", subsequent_indent="  ")
         out.append(f"Summary (AI guess, by {agent})\n{text}\n")
     else:
-        out.append(f"Summary unavailable: {result['reason'] or 'no answer'}\n")
-    out.append(tables.draw(("File", "Risk", "What changed (AI)"), [rows], (40, 4, 50)))
-    return "\n".join(out) + "\n"
+        out.append(f"Summary unavailable: {result['reason'] or 'no answer'}.\n")
+    out.append(tables.draw(("File", "Risk", "What changed (AI guess)"), [rows], (40, 4, 50)).rstrip("\n"))
+    limits = []
+    if cut:
+        limits.append(f"Not fully summarized: {', '.join(cut)} (diff cut, too long).")
+    if skipped:
+        limits.append(f"Not sent: {', '.join(skipped)} (over the {guard.AI_LINE_LIMIT:,}-line limit).")
+    if limits:
+        out.append(" ".join(limits))
+    return "\n".join(out) + "\n\n"
 
 
 def _diff(args):
@@ -112,7 +122,10 @@ def _diff(args):
         names = ", ".join(f"{c.path} ({c.file_kind})" for c in committed)
         print(f"Committed since last check: {names}\n")
     if found:
-        ai = _ai_summary(root, table, found)
+        try:
+            ai = _ai_summary(root, table, found)
+        except Exception:  # the AI part must never stop diff from printing
+            ai = "Summary unavailable: unexpected error.\n\n"
         groups = changes.format_groups(changes.sort_into_groups(found), label)
         title, _, body = groups.partition("\n\n")
         print(f"{title}\n\n{ai}{body}", end="")
