@@ -4,7 +4,7 @@ import posixpath
 import re
 
 from lineup import git
-from lineup.guard import private_pathspecs
+from lineup.guard import has_secret, private_pathspecs
 
 LEVELS = {"LOW": 1, "MED": 2, "HIGH": 3}
 
@@ -40,6 +40,8 @@ def file_rules(change):
         flags.append(("HIGH", "copy of a private file, contents not read"))
     elif change.private:
         flags.append(("HIGH", ".env or key file changed, contents not read"))
+    if change.diff and has_secret("\n".join(_changed_lines(change))):
+        flags.append(("HIGH", "possible secret (value hidden)"))
     if kind == "auth":
         flags.append(("HIGH", "auth or payment file changed"))
     if path.startswith(AGENT_AND_CI):

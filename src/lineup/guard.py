@@ -2,6 +2,7 @@
 
 import fnmatch
 import posixpath
+import re
 
 # Matched against the file name only, case-insensitive.
 PRIVATE_NAMES = [
@@ -94,15 +95,93 @@ Reply with JSON only, no other text, in this shape:
 Only use paths that appear in the data. For files marked "contents not read" or "left out", say only that."""
 
 
+# ---- secret redaction: runs locally on every message before it leaves the machine ----
+
+REDACTED = "[REDACTED]"
+_NOT_IN_WORD = r"(?<![A-Za-z0-9_])"
+
+# A private-key block, from BEGIN to END (or to the end of the text if END is missing).
+_KEY_BLOCK = re.compile(
+    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----.*?(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|\Z)",
+    re.S,
+)
+
+# Known key shapes. Lengths are minimums, because providers change them.
+_KEY_SHAPES = [
+    ("Google / Gemini", r"AIza[0-9A-Za-z_\-]{35}"),
+    ("Anthropic", r"sk-ant-[A-Za-z0-9_\-]{20,}"),
+    ("OpenAI", r"sk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_\-]{20,}"),
+    ("GitHub", r"gh[pousr]_[A-Za-z0-9]{30,}"),
+    ("GitHub", r"github_pat_[A-Za-z0-9_]{22,}"),
+    ("AWS", r"(?:AKIA|ASIA)[0-9A-Z]{16}"),
+    ("Stripe", r"(?:sk|rk)_live_[0-9A-Za-z]{10,}"),
+    ("Slack", r"xox[abeoprs]-[0-9A-Za-z\-]{10,}"),
+    ("Hugging Face", r"hf_[A-Za-z0-9]{30,}"),
+]
+_KEYS = re.compile(_NOT_IN_WORD + "(?:" + "|".join(p for _, p in _KEY_SHAPES) + ")")
+
+# A value given to a secret-sounding name: API_KEY = "...", SECRET_KEY=abc123, "token": "...".
+_SECRET_NAME = r"[A-Za-z0-9_.\-]*(?:secret|token|api[_\-]?key|apikey|passwd|password|pwd|private[_\-]?key|access[_\-]?key|auth[_\-]?key|credentials?)[A-Za-z0-9_.\-]*"
+_ASSIGNED = re.compile(
+    r"(?i)(?P<name>[\"']?" + _SECRET_NAME + r"[\"']?\s*(?:=(?!=)|:(?!:)|=>)\s*)"
+    r"(?P<value>\"[^\"\n]*\"|'[^'\n]*'|[^\s\"',;()\[\]{}]+)(?P<after>.?)"
+)
+_LITERAL_WORDS = {"none", "null", "nil", "true", "false", "undefined", "str", "string", "int", "bytes", "optional"}
+
+
+def _looks_like_literal(value, after):
+    """True for a value that is written out (a secret), false for code like get_token() or os.environ[...]."""
+    if value[:1] in "\"'":
+        return len(value) > 2 and value[1:-1] != REDACTED  # any non-empty quoted text
+    if (after and after in "([") or "." in value or value.lower() in _LITERAL_WORDS:
+        return False  # a call, an index, an attribute or a keyword: code, not a secret
+    if re.fullmatch(r"[A-Za-z_]+", value):
+        return False  # a plain variable name
+    return True  # e.g. abc123, S3CR3T_ENV_111, hunter2
+
+
+def redact(text):
+    """Replace secret-looking text with [REDACTED]. Returns (text, how many were hidden)."""
+    count = 0
+
+    def hide(_match):
+        nonlocal count
+        count += 1
+        return REDACTED
+
+    text = _KEY_BLOCK.sub(hide, text)
+    text = _KEYS.sub(hide, text)
+
+    def hide_value(match):
+        nonlocal count
+        value, after = match.group("value"), match.group("after")
+        if not _looks_like_literal(value, after):
+            return match.group(0)
+        count += 1
+        quote = value[0] if value[:1] in "\"'" else ""
+        return f"{match.group('name')}{quote}{REDACTED}{quote}{after}"
+
+    text = _ASSIGNED.sub(hide_value, text)
+    return text, count
+
+
+def has_secret(text):
+    """True if `text` holds something that looks like a secret (used to score the file HIGH)."""
+    return redact(text)[1] > 0
+
+
 def build_message(items):
-    """The text sent to the AI: instructions, then the data. Refuses if a private file's contents slipped in."""
+    """The text sent to the AI: instructions, then the data. Refuses if a private file's contents slipped in.
+
+    Every part is passed through redact() first, so secret-looking text never leaves the machine.
+    """
     parts = []
     for path, level, note, diff in items:
         if diff and is_private(path):
             raise ValueError(f"refusing to send the contents of a private file: {path}")
         if note:
-            parts.append(f"--- {path} ({level}): {note}")
+            parts.append(f"--- {path} ({level}): {redact(note)[0]}")
         else:
-            safe = diff.replace("</data>", "<_/data>")  # a file can't close the data block early
+            safe = redact(diff)[0].replace("</data>", "<_/data>")  # a file can't close the data block early
             parts.append(f"--- {path} ({level})\n{safe}")
     return f"{INSTRUCTIONS}\n\n<data>\n" + "\n".join(parts) + "\n</data>\n"
