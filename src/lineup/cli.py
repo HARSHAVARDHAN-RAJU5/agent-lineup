@@ -116,6 +116,7 @@ def _diff(args):
     if root is None:
         return 2
     table, found, committed, label = _collect(root)
+    store.count_usage(root, diff_runs=1)
     if committed:
         names = ", ".join(f"{c.path} ({c.file_kind})" for c in committed)
         print(f"Committed since last check: {names}\n")
@@ -174,6 +175,7 @@ def _risky(args):
     if root is None:
         return 2
     table, found, _, label = _collect(root)
+    store.count_usage(root, risky_runs=1)
     committed = committed_rows(table)
     if not found and not committed:
         print(_no_changes("risky", root, table))
@@ -253,6 +255,9 @@ def _rollback(args):
             word = f"nothing to do: {undo.reason}"
         elif word.startswith("failed"):
             problems = True
+        outcome = ("refused" if undo.action == "refuse" else "nothing_to_do" if undo.action == "nothing"
+                   else "failed" if word.startswith("failed") else "done")
+        store.count_usage(root, **{f"rollback_{outcome}": 1})
         print(f"{undo.id:<3} {undo.path:<{width}}  {word}")
         if undo.action in rollback.DONE and not word.startswith("failed"):
             for warning in undo.warnings:
@@ -274,6 +279,40 @@ def _rollback(args):
     return 1 if problems else 0
 
 
+def report_text(usage):
+    """The usage summary for testers to send: counts and dates only, from a fixed list of names."""
+    c, days = usage["counts"], sorted(usage["days"])
+    if not c and not days:
+        return "lineup report: no usage recorded in this repo yet."
+    n = lambda name: c.get(name, 0)  # noqa: E731
+    period = f" ({days[0]} to {days[-1]})" if days else ""
+    rows = [
+        ("lineup version", __version__),
+        ("Days active", f"{len(days)}{period}"),
+        ("Sessions started", n("sessions")),
+        ("Agent replies with changes", n("replies_with_changes")),
+        ("Files flagged after replies", f"HIGH {n('flagged_HIGH')}, MED {n('flagged_MED')}, LOW {n('flagged_LOW')}"),
+        ("lineup diff runs", n("diff_runs")),
+        ("lineup risky runs", n("risky_runs")),
+        ("Rollbacks", f"done {n('rollback_done')}, refused {n('rollback_refused')}, "
+                      f"failed {n('rollback_failed')}, nothing to do {n('rollback_nothing_to_do')}"),
+    ]
+    width = max(len(name) for name, _ in rows)
+    lines = ["lineup report (this repo only)", ""]
+    lines += [f"{name:<{width}}  {value}" for name, value in rows]
+    lines += ["", "That's everything in the report: counts and dates only, no code, file names or secrets.",
+              "Nothing has been sent. To share it, copy the lines above into your feedback."]
+    return "\n".join(lines)
+
+
+def _report(args):
+    root = _root()
+    if root is None:
+        return 2
+    print(report_text(store.load_usage(root)))
+    return 0
+
+
 def _confirm(args, question, flag):
     """True to go ahead: --yes, or the user says yes. Never asks when there's no one to answer."""
     if args.yes:
@@ -281,7 +320,12 @@ def _confirm(args, question, flag):
     if not sys.stdin.isatty():
         print(f"\nNothing was written. Run lineup init {flag}--yes to do it.")
         return False
-    if input(f"\n{question} [y/N] ").strip().lower() in ("y", "yes"):
+    try:
+        answer = input(f"\n{question} [y/N] ")
+    except EOFError:  # no one to answer after all (e.g. NUL on Windows looks like a terminal)
+        print(f"\nNothing was written. Run lineup init {flag}--yes to do it.")
+        return False
+    if answer.strip().lower() in ("y", "yes"):
         return True
     print("Nothing was written.")
     return False
@@ -363,6 +407,8 @@ def build_parser():
     undo.add_argument("ids", nargs="+", metavar="id_or_file",
                       help="file IDs or names from lineup risky / diff, e.g. 3 or auth.py")
     undo.set_defaults(func=_rollback)
+    sub.add_parser("report", help="usage counts for testers to send (nothing is sent by lineup)").set_defaults(
+        func=_report)
 
     hook = sub.add_parser("hook", help="run by the agent's hooks (start: photo, stop: score line, prompt: notes)")
     hook.add_argument("event", choices=["start", "stop", "prompt"])

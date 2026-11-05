@@ -89,6 +89,7 @@ def on_session_start(root, event, agent):
         label = "no commits yet" if table["start_commit"] == git.EMPTY_TREE else table["start_commit"][:7]
         message = f"{PREFIX} photo taken at {label} ({snapshot.summary(table)})"
     context = SESSION_NOTE + (f"\n{note}" if note else "")
+    store.count_usage(root, sessions=1)
     if agent == "claude":
         # Claude Code doesn't display a session-start message, so it's shown once with the next
         # end-of-reply message instead (and never, if the session makes no edits).
@@ -128,6 +129,8 @@ def on_stop(root, event):
             levels.append(level)
             if level == "HIGH":
                 high.append((now.get(c.path, {}).get("id", "-"), c.path, flags[0][1]))
+        store.count_usage(root, replies_with_changes=1, **{f"flagged_{level}": levels.count(level)
+                                                            for level in ("HIGH", "MED", "LOW")})
         counts = ", ".join(f"{levels.count(level)} {level}" for level in ("HIGH", "MED", "LOW") if level in levels)
         word = "file" if len(this_reply) == 1 else "files"
         parts.append(f"{len(this_reply)} {word} changed ({counts})")

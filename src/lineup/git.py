@@ -27,7 +27,9 @@ def repo_root(cwd="."):
     """Top folder of the repo containing `cwd`."""
     try:
         out = _run(["rev-parse", "--show-toplevel"], cwd).stdout
-    except (GitError, FileNotFoundError) as e:
+    except FileNotFoundError as e:
+        raise GitError("git isn't installed or isn't on your PATH. Install git, then try again.") from e
+    except GitError as e:
         raise GitError("not inside a git repository") from e
     return Path(out.decode("utf-8", "replace").strip())
 

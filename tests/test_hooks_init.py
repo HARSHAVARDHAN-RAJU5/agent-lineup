@@ -192,3 +192,16 @@ def test_without_lineup_keeps_everything_else():
                                           {"type": "command", "command": "echo mine"}]}]}, "x": 1}
     assert hookjson.without_lineup(data) == {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo mine"}]}]},
                                              "x": 1}
+
+
+class EmptyTerminal(io.StringIO):
+    def isatty(self):
+        return True  # what Windows reports for NUL, although nothing can be read
+
+
+def test_init_with_no_answer_writes_nothing_and_doesnt_crash(repo, monkeypatch, capsys):
+    monkeypatch.chdir(repo.root)
+    monkeypatch.setattr("sys.stdin", EmptyTerminal(""))
+    code, out = init(capsys)
+    assert code == 1 and "Nothing was written. Run lineup init --yes to do it." in out
+    assert not hooks.installed(repo.root)

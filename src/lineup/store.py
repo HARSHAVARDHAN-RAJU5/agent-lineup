@@ -19,6 +19,7 @@ SUMMARIES = "summaries.json"
 BACKUPS = "backups"
 AGENT_NOTE = "agent_note.json"
 START_MESSAGE = "start_message.txt"
+USAGE = "usage.json"
 
 
 def folder(root):
@@ -198,6 +199,32 @@ def log(root, message):
 def read_log(root):
     file = folder(root) / DIARY
     return file.read_text(encoding="utf-8").splitlines() if file.is_file() else []
+
+
+def load_usage(root):
+    """Counts for lineup report: {"counts": {name: n}, "days": ["YYYY-MM-DD", ...]}. Numbers and dates only."""
+    file = folder(root) / USAGE
+    try:
+        data = json.loads(file.read_text(encoding="utf-8")) if file.is_file() else {}
+    except (OSError, ValueError):
+        data = {}
+    counts = {k: v for k, v in dict(data.get("counts", {})).items() if isinstance(v, int)}
+    days = [d for d in data.get("days", []) if isinstance(d, str)]
+    return {"counts": counts, "days": days}
+
+
+def count_usage(root, **counts):
+    """Add to the usage counts and mark today as active. Never raises: counting must not break a command."""
+    try:
+        data = load_usage(root)
+        for name, n in counts.items():
+            data["counts"][name] = data["counts"].get(name, 0) + int(n)
+        today = datetime.now().strftime("%Y-%m-%d")
+        if today not in data["days"]:
+            data["days"].append(today)
+        _save_json(root, USAGE, data)
+    except Exception:
+        pass
 
 
 def clear_copies(root):

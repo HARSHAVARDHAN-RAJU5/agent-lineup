@@ -20,6 +20,13 @@ def test_diff_outside_a_repo(tmp_path, monkeypatch, capsys):
     assert "not inside a git repository" in capsys.readouterr().err
 
 
+def test_missing_git_says_so(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", str(tmp_path))  # no git anywhere on PATH
+    assert main(["risky"]) == 2
+    assert "git isn't installed or isn't on your PATH" in capsys.readouterr().err
+
+
 def test_diff_lists_changes(repo, monkeypatch, capsys):
     repo.write("app.py", "x = 1\n")
     repo.commit()
