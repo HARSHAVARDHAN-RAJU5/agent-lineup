@@ -82,3 +82,39 @@ def plan_undo(root, table, file_id):
     if file.read_bytes() == before:
         return Undo(file_id, path, "nothing", reason="already the same as at the start")
     return Undo(file_id, path, "restore", before=before)
+
+
+# ---- step 2: back up, then write back or delete ----
+
+DONE = {"restore": "restored", "bring back": "brought back", "delete": "deleted"}
+
+
+def apply_undo(root, undo):
+    """Carry out a plan from plan_undo(). Backs up the current file first. Returns a short result word."""
+    if undo.action not in DONE:
+        word = "refused" if undo.action == "refuse" else "nothing to do"
+        store.log(root, f"rollback {undo.id}: {undo.path} {word}")
+        return word
+
+    file = Path(root, undo.path)
+    if file.is_file() and not changes.is_link(file):
+        store.save_backup(root, undo.id, undo.path, file.read_bytes())  # so the undo can be undone
+
+    if undo.action == "delete":
+        file.unlink()
+        _remove_empty_folders(file.parent, Path(root))
+    else:
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_bytes(undo.before)
+
+    word = DONE[undo.action]
+    store.log(root, f"rollback {undo.id}: {undo.path} {word}")
+    return word
+
+
+def _remove_empty_folders(start, root):
+    """Remove folders left empty by a delete, never the repo folder itself."""
+    parent = start
+    while parent != root and parent.is_dir() and not any(parent.iterdir()):
+        parent.rmdir()
+        parent = parent.parent

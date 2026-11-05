@@ -15,6 +15,7 @@ TABLE = "table.json"
 DIARY = "audit.log"
 COPIES = "copies"
 SUMMARIES = "summaries.json"
+BACKUPS = "backups"
 
 
 def folder(root):
@@ -64,12 +65,53 @@ def clear_summaries(root):
     (folder(root) / SUMMARIES).unlink(missing_ok=True)
 
 
-def _copy_path(root, path):
-    """Where the copy of repo file `path` lives. Keeps its folders; refuses paths that escape."""
+def _safe_parts(path):
     parts = PurePosixPath(path).parts
     if not parts or PurePosixPath(path).is_absolute() or ".." in parts:
         raise ValueError(f"unsafe path: {path}")
-    return folder(root).joinpath(COPIES, *parts)
+    return parts
+
+
+def _copy_path(root, path):
+    """Where the copy of repo file `path` lives. Keeps its folders; refuses paths that escape."""
+    return folder(root).joinpath(COPIES, *_safe_parts(path))
+
+
+def _backup_path(root, file_id, path):
+    return folder(root).joinpath(BACKUPS, str(int(file_id)), *_safe_parts(path))
+
+
+def save_backup(root, file_id, path, data):
+    """Keep the version a rollback is about to replace. One backup per ID: a new one replaces the old."""
+    shutil.rmtree(folder(root) / BACKUPS / str(int(file_id)), ignore_errors=True)
+    target = _backup_path(root, file_id, path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+
+
+def read_backup(root, file_id, path):
+    target = _backup_path(root, file_id, path)
+    return target.read_bytes() if target.is_file() else None
+
+
+def delete_backups(root, path):
+    """Remove every backup of `path` (used when the file is committed)."""
+    backups = folder(root) / BACKUPS
+    if not backups.is_dir():
+        return
+    for id_folder in backups.iterdir():
+        target = id_folder.joinpath(*_safe_parts(path))
+        if target.is_file():
+            target.unlink()
+            _remove_empty_folders(target.parent, backups)
+
+
+def _remove_empty_folders(start, stop):
+    """Remove `start` and its parents while they're empty, never `stop` itself."""
+    parent = start
+    while parent != stop and parent.is_dir() and not any(parent.iterdir()):
+        parent.rmdir()
+        parent = parent.parent
 
 
 def save_copy(root, path, data):
@@ -90,11 +132,7 @@ def delete_copy(root, path):
     target = _copy_path(root, path)
     if target.is_file():
         target.unlink()
-    copies = folder(root) / COPIES
-    parent = target.parent
-    while parent != copies and parent.is_dir() and not any(parent.iterdir()):
-        parent.rmdir()
-        parent = parent.parent
+    _remove_empty_folders(target.parent, folder(root) / COPIES)
 
 
 def log(root, message):

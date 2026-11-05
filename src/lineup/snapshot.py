@@ -96,6 +96,7 @@ def check_commits(root, table):
         row = table["files"].get(path, {})
         if row.get("copy"):
             store.delete_copy(root, path)
+        store.delete_backups(root, path)  # committed: its rollback backups aren't needed any more
         new_row = {"status": "committed", "base": head}
         if "id" in row:
             new_row["id"] = row["id"]

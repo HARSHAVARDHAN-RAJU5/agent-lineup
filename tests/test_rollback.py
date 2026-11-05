@@ -116,3 +116,73 @@ def test_unknown_id_lists_the_valid_ones(session):
     with pytest.raises(UnknownId) as error:
         plan_undo(session.root, table, 99)
     assert "no file with ID 99. Valid IDs: 1, 2, 3, 4, 5" in str(error.value)
+
+
+# ---- step 2: back up, then write back or delete ----
+
+from lineup.rollback import apply_undo  # noqa: E402
+
+
+def roll_back(repo, table, path):
+    return apply_undo(repo.root, undo_for(repo, table, path))
+
+
+def test_files_go_back_byte_for_byte_with_a_backup(session):
+    table = check(session)
+    assert roll_back(session, table, "auth/session.py") == "restored"
+    assert roll_back(session, table, "notes.py") == "restored"
+    assert roll_back(session, table, "old.py") == "brought back"
+    assert roll_back(session, table, "utils/cache.py") == "deleted"
+
+    root = session.root
+    assert (root / "auth/session.py").read_bytes() == b"TIMEOUT = 30\n"
+    assert (root / "notes.py").read_bytes() == b"start\n"
+    assert (root / "old.py").read_bytes() == b"OLD = 1\n"
+    assert not (root / "utils").exists()  # the empty folder went too
+
+    ids = {path: table["files"][path]["id"] for path in ("auth/session.py", "notes.py", "utils/cache.py")}
+    assert store.read_backup(root, ids["auth/session.py"], "auth/session.py") == b"TIMEOUT = 1440\n"
+    assert store.read_backup(root, ids["notes.py"], "notes.py") == b"start\nagent line\n"
+    assert store.read_backup(root, ids["utils/cache.py"], "utils/cache.py") == b"def get(key):\n    return None\n"
+
+
+def test_after_rollback_diff_shows_no_change_for_those_files(session):
+    table = check(session)
+    for path in ("auth/session.py", "notes.py", "old.py", "utils/cache.py"):
+        roll_back(session, table, path)
+    left = {c.path for c in find_changes(session.root, store.load_table(session.root))}
+    assert left == {".env"}  # only the refused one is still changed
+
+
+def test_deleted_file_comes_back_with_its_folder(repo):
+    repo.write("lib/deep/util.py", "U = 1\n")
+    repo.commit()
+    snapshot.take(repo.root)
+    repo.delete("lib/deep/util.py")
+    (repo.root / "lib/deep").rmdir()
+    (repo.root / "lib").rmdir()
+    table = check(repo)
+    assert roll_back(repo, table, "lib/deep/util.py") == "brought back"
+    assert (repo.root / "lib/deep/util.py").read_bytes() == b"U = 1\n"
+
+
+def test_refused_file_is_untouched_and_diary_has_names_only(session):
+    table = check(session)
+    assert roll_back(session, table, ".env") == "refused"
+    assert (session.root / ".env").read_bytes() == b"SECRET=changed\n"
+    roll_back(session, table, "auth/session.py")
+    log = "\n".join(store.read_log(session.root))
+    assert "rollback 1: .env refused" in log and "auth/session.py restored" in log
+    assert "TIMEOUT" not in log and "SECRET" not in log
+
+
+def test_committing_removes_the_backup(session):
+    table = check(session)
+    roll_back(session, table, "notes.py")
+    file_id = table["files"]["notes.py"]["id"]
+    assert store.read_backup(session.root, file_id, "notes.py") is not None
+    session.write("notes.py", "start\nfinal\n")
+    session.git("add", "notes.py")
+    session.git("commit", "-q", "-m", "notes")
+    check(session)
+    assert store.read_backup(session.root, file_id, "notes.py") is None
