@@ -16,10 +16,11 @@ def _overview_key(keys):
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
 
-def summarize(root, items, agent, command=None):
+def summarize(root, items, agent, command=None, on_ask=None):
     """Summary for `items` (from guard.ai_input). Returns {"overview", "files", "reason", "asked"}.
 
     "asked" lists the files whose diffs went to the AI this time; [] means no AI call was made.
+    `on_ask` is called just before the AI is asked (e.g. to say "Asking claude...").
     """
     saved = store.load_summaries(root)
     keys = {item[0]: key(item) for item in items}
@@ -39,11 +40,13 @@ def summarize(root, items, agent, command=None):
     message_items = new_items + [(path, level, f"unchanged since the last check; earlier summary: {reused[path]}", "")
                                  for path, level, _, _ in items if path in reused]
     asked = [item[0] for item in new_items]
+    if on_ask:
+        on_ask()
     answer, reason = llm.run(guard.build_message(message_items), agent, asked, root=root, command=command)
 
     files = dict(reused)
-    if answer:
-        files.update(answer["files"])
+    if answer:  # every file asked about is saved, even with no line (e.g. .env), so it isn't asked again
+        files.update({path: answer["files"].get(path, "") for path in asked})
     store.save_summaries(root, {
         "overview": {"key": overview_key, "text": answer["overview"]} if answer else {},
         "files": {path: {"key": keys[path], "line": line} for path, line in files.items()},

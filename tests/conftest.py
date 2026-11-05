@@ -33,3 +33,10 @@ class Repo:
 @pytest.fixture
 def repo(tmp_path):
     return Repo(tmp_path)
+
+
+@pytest.fixture(autouse=True)
+def no_real_agent(monkeypatch):
+    """Tests never call a real AI: every agent looks "not installed" unless a test uses a fake one."""
+    from lineup import llm
+    monkeypatch.setattr(llm, "installed", lambda command: None)

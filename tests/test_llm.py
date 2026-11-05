@@ -78,7 +78,6 @@ def test_timeout(fake, monkeypatch):
 
 
 def test_not_installed(monkeypatch):
-    monkeypatch.setattr(llm.shutil, "which", lambda name: None)
     assert llm.run("x", "claude", []) == (None, "claude not found")
     assert llm.run("x", None, []) == (None, "no agent found")
 

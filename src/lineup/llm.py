@@ -12,8 +12,8 @@ from lineup import store
 AGENTS = {
     "claude": ["claude", "-p", "--output-format", "json", "--tools", "", "--no-session-persistence",
                "--strict-mcp-config", "--model", "haiku"],
-    "codex": ["codex", "exec", "--json", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check",
-              "-m", "gpt-5.4-mini", "-"],
+    # No -m for codex: a ChatGPT login rejects gpt-5.4-mini, so codex uses its own default model.
+    "codex": ["codex", "exec", "--json", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-"],
 }
 LOOP_GUARD = "LINEUP_RUNNING"  # hooks exit when they see this, so the AI call can't trigger them again
 TIMEOUT_SECONDS = 120
@@ -21,8 +21,14 @@ MAX_LINE = 200
 MAX_OVERVIEW = 600
 
 
-def pick_agent(table, which=shutil.which):
+def installed(command):
+    """Full path of an agent's command, or None. (Tests replace this so no real AI is ever called.)"""
+    return shutil.which(command)
+
+
+def pick_agent(table, which=None):
     """The agent saved in the photo, else the first one installed. None if there's none."""
+    which = which or installed
     saved = (table or {}).get("agent")
     if saved in AGENTS:
         return saved
@@ -86,7 +92,7 @@ def _run(message, agent, sent_paths, command, timeout):
     if agent not in AGENTS:
         return None, "no agent found"
     if command is None:
-        exe = shutil.which(AGENTS[agent][0])
+        exe = installed(AGENTS[agent][0])
         if not exe:
             return None, f"{agent} not found"
         command = [exe, *AGENTS[agent][1:]]

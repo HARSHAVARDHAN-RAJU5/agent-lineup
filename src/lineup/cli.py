@@ -2,8 +2,9 @@
 
 import argparse
 import sys
+import textwrap
 
-from lineup import __version__, changes, git, llm, rules, snapshot, store
+from lineup import __version__, changes, git, guard, llm, rules, snapshot, store, summary
 from lineup import table as tables
 
 
@@ -62,6 +63,46 @@ def _no_photo(root):
           "and they can't be rolled back. Tracking from now on.")
 
 
+def scores(root, found):
+    """{path: "HIGH" | "MED" | "LOW"} from the rules (the same scores `risky` shows)."""
+    return {c.path: rules.score(rules.rules_for(c, found, root)) for c in found}
+
+
+def _ai_summary(root, table, found):
+    """The AI part of `diff`: Summary text plus one line per file. Never stops `diff` from printing."""
+    levels = scores(root, found)
+    items, skipped = guard.ai_input(found, levels)
+    agent = llm.pick_agent(table)
+    if agent is None:
+        return "Summary unavailable: no agent found\n\n"
+
+    def say_asking():
+        print(f"Asking {agent} for a summary...", file=sys.stderr, flush=True)
+
+    result = summary.summarize(root, items, agent, on_ask=say_asking)
+    notes = {path: note for path, _, note, _ in items if note}
+    rows = []
+    for path in sorted(levels, key=lambda p: (-rules.LEVELS[levels[p]], p)):
+        if result["files"].get(path):
+            line = result["files"][path]
+        elif path in skipped:
+            line = f"not summarized ({levels[path]}, diff too big)"
+        elif path in notes:
+            line = notes[path][:1].upper() + notes[path][1:]
+        else:
+            line = "no summary yet"
+        rows.append((path, levels[path], line))
+
+    out = []
+    if result["overview"]:
+        text = textwrap.fill(result["overview"], 78, initial_indent="  ", subsequent_indent="  ")
+        out.append(f"Summary (AI guess, by {agent})\n{text}\n")
+    else:
+        out.append(f"Summary unavailable: {result['reason'] or 'no answer'}\n")
+    out.append(tables.draw(("File", "Risk", "What changed (AI)"), [rows], (40, 4, 50)))
+    return "\n".join(out) + "\n"
+
+
 def _diff(args):
     root = _root()
     if root is None:
@@ -71,7 +112,10 @@ def _diff(args):
         names = ", ".join(f"{c.path} ({c.file_kind})" for c in committed)
         print(f"Committed since last check: {names}\n")
     if found:
-        print(changes.format_groups(changes.sort_into_groups(found), label), end="")
+        ai = _ai_summary(root, table, found)
+        groups = changes.format_groups(changes.sort_into_groups(found), label)
+        title, _, body = groups.partition("\n\n")
+        print(f"{title}\n\n{ai}{body}", end="")
     else:
         print(f"lineup diff: no changes since the {'photo' if table else 'last commit'}")
     if table is None:
