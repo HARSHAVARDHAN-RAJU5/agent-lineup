@@ -20,7 +20,7 @@ lineup is an open-source CLI (MIT) that runs after a coding agent makes changes.
 3. **New commit check:** compare the latest commit with the one in the table. Flag any files in new commits before updating the table.
 4. **`diff`:** compare the repo to the snapshot and sort the changes.
 5. **LLM:** explain what changed and why, only for files changed since the last check.
-6. **`risky`:** rules set the score, then the LLM's guess fills in the reason.
+6. **`risky`:** rules set the score and show which rules fired. The LLM's reason guess moves to the next version.
 7. **`rollback`:** the user undoes the files they pick.
 
 ## Snapshot
@@ -77,16 +77,16 @@ Finds changes with git and describes them with the LLM.
 
 ## `lineup risky`
 
-Rules set the score, so the same change always gets the same score. The LLM only writes the reason, marked as a guess, and can't change the score.
+Rules set the score, so the same change always gets the same score. v1 shows the rules that fired ("Why (rule)"); the LLM's reason guess moves to the next version.
 
-If several rules match, the highest wins. If no agent is available, still show the rule-based flags.
+If several rules match, the highest wins. No agent is needed.
 
 ```
-ID | File            | Risk | Reason (guess)             | Other
-1  | tests/test_a.py | HIGH | Removed a failing test     | Deleted
-2  | auth/session.py | HIGH | Raised the session timeout | Linked to 3
-3  | api/routes.py   | MED  | Updated for the timeout    | Linked to 2
-4  | .env            | HIGH | Contents not read          | Can't roll back
+ID | File            | Risk | Why (rule)                                  | Other
+1  | tests/test_a.py | HIGH | test file deleted                           | Deleted
+2  | auth/session.py | HIGH | auth or payment file changed                |
+3  | api/routes.py   | LOW  | code edited                                 |
+4  | .env            | HIGH | .env or key file changed, contents not read | Can't roll back
 ```
 
 ### Score rules
@@ -124,7 +124,7 @@ Keep these simple. Tester data decides any changes.
 The LLM only sees the changes, never the agent's real reasoning. Anything it infers is labelled as a guess.
 
 - **Possible breakage:** working code removed to fix something small, or a file added just to pass a test. `diff` spots the change and `risky` flags it. Always say "possible."
-- **Linked files:** "probably linked to these files, undo them together."
+- **Linked files:** moves to the next version. In v1, rollback uses a name match instead (see `lineup rollback`).
 
 ## `lineup rollback`
 
@@ -137,7 +137,7 @@ Works per file, from the snapshot, with no LLM. Takes one or more IDs: `lineup r
 | File added | Deletes it |
 
 - Save the file's current version in a small backup first. Delete the backup when that file is committed.
-- Warn if linked files were changed too.
+- Warn about probably linked files by name match (`test_auth.py` ↔ `auth.py`), and list the other files changed this session: "Also changed: … Check whether they depend on this file." No AI, and never roll back other files automatically.
 - If there's no snapshot, refuse to run. Falling back to the last commit could wipe uncommitted work.
 - `.env`: flag only. Say "`.env` changed, can't undo this, please check it yourself."
 - Committed files can't be rolled back. Point the user to git.
@@ -173,7 +173,7 @@ Not tested with a real login:
 2. Snapshot, table and audit log
 3. `risky` rules
 4. `diff` and the LLM call, with the private file guard
-5. LLM reasons in the `risky` table
+5. ~~LLM reasons in the `risky` table~~ moved to the next version (Nov 5)
 6. `rollback`
 7. Hooks and commit handling
 8. Easy install
@@ -191,6 +191,7 @@ Both need the agent's session logs, which differ between Claude and Codex.
 **Before Nov 10:** `notes.md` template for testers.
 
 **Later versions:**
+- LLM reasons and linked files in `risky` (was build step 5)
 - Pattern recognition, with the coding agent using lineup's table
 - Rollback for single edits inside a file
 - Checking whether a new package runs install scripts
@@ -224,4 +225,4 @@ Both need the agent's session logs, which differ between Claude and Codex.
 - **Output name:** "Rundown" for the combined output, with "possible breakage" as one flag inside it.
 - **Possible breakage score:** MED.
 - **Default models:** Haiku for Claude. Codex uses its own default model, because a ChatGPT login rejects `gpt-5.4-mini` (found Nov 5).
-- **Hook output:** after each reply the hook shows only the fast rule-based score line. The AI runs only on `lineup diff` / `lineup risky` (answers saved). Make it automatic later, after testing.
+- **Hook output:** after each reply the hook shows only the fast rule-based score line. The AI runs only on `lineup diff` (answers saved). Make it automatic later, after testing.
