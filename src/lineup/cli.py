@@ -3,7 +3,7 @@
 import argparse
 import sys
 
-from lineup import __version__, changes, git, rules, snapshot, store
+from lineup import __version__, changes, git, llm, rules, snapshot, store
 from lineup import table as tables
 
 
@@ -28,7 +28,7 @@ def _hook(args):
     root = _root()
     if root is None:
         return 2
-    table, kept = snapshot.start_session(root, fresh=args.fresh)
+    table, kept = snapshot.start_session(root, fresh=args.fresh, agent=args.agent)
     if kept:
         word = "file" if kept == 1 else "files"
         print(f"Keeping the earlier snapshot: {kept} uncommitted {word} from before this session. "
@@ -154,6 +154,7 @@ def build_parser():
     hook = sub.add_parser("hook", help="run by the agent's hooks (start: take the photo)")
     hook.add_argument("event", choices=["start"])
     hook.add_argument("--fresh", action="store_true", help="always take a new photo")
+    hook.add_argument("--agent", choices=list(llm.AGENTS), help="the agent running this session")
     hook.set_defaults(func=_hook)
 
     return parser
