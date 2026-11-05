@@ -29,6 +29,7 @@ def take(root, keep=False):
         return table
 
     store.clear_copies(root)
+    store.clear_summaries(root)  # new session: old AI answers no longer apply
     head = git.head_commit(root)
     base = head or git.EMPTY_TREE
 

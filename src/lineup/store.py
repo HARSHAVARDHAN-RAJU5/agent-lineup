@@ -14,6 +14,7 @@ from lineup import git
 TABLE = "table.json"
 DIARY = "audit.log"
 COPIES = "copies"
+SUMMARIES = "summaries.json"
 
 
 def folder(root):
@@ -35,12 +36,32 @@ def load_table(root):
     return json.loads(file.read_text(encoding="utf-8"))
 
 
-def save_table(root, table):
-    """Write to a temp file first, then swap it in, so a crash never leaves half a table."""
-    file = folder(root) / TABLE
-    tmp = file.with_name(TABLE + ".tmp")
-    tmp.write_text(json.dumps(table, indent=2, sort_keys=True), encoding="utf-8")
+def _save_json(root, name, data):
+    """Write to a temp file first, then swap it in, so a crash never leaves half a file."""
+    file = folder(root) / name
+    tmp = file.with_name(name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
     os.replace(tmp, file)
+
+
+def save_table(root, table):
+    _save_json(root, TABLE, table)
+
+
+def load_summaries(root):
+    """Saved AI answers: {"overview": {...}, "files": {path: {"key", "line"}}}."""
+    file = folder(root) / SUMMARIES
+    if not file.is_file():
+        return {"overview": {}, "files": {}}
+    return json.loads(file.read_text(encoding="utf-8"))
+
+
+def save_summaries(root, data):
+    _save_json(root, SUMMARIES, data)
+
+
+def clear_summaries(root):
+    (folder(root) / SUMMARIES).unlink(missing_ok=True)
 
 
 def _copy_path(root, path):
