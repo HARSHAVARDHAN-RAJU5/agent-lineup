@@ -257,3 +257,57 @@ def test_no_ids_is_an_error(capsys):
     with pytest.raises(SystemExit) as exit_info:
         main(["rollback"])
     assert exit_info.value.code == 2
+
+
+# ---- step 4: probably linked / also changed ----
+
+@pytest.fixture
+def linked(repo):
+    repo.write("auth.py", "TIMEOUT = 30\n")
+    repo.write("tests/test_auth.py", "def test_t():\n    assert TIMEOUT == 30\n")
+    repo.write("api/routes.py", "R = 1\n")
+    repo.commit()
+    snapshot.take(repo.root)
+    repo.write("auth.py", "TIMEOUT = 1440\n")
+    repo.write("tests/test_auth.py", "def test_t():\n    assert TIMEOUT == 1440\n")
+    repo.write("api/routes.py", "R = 2\n")
+    table = check(repo)
+    return repo, {path: str(row["id"]) for path, row in table["files"].items() if "id" in row}
+
+
+def test_linked_test_and_other_files_are_named(linked, monkeypatch, capsys):
+    repo, ids = linked
+    _, out = run(repo, monkeypatch, capsys, "rollback", ids["auth.py"])
+    assert (f"Probably linked: tests/test_auth.py (ID {ids['tests/test_auth.py']}) also changed. "
+            f"Roll it back too? lineup rollback {ids['tests/test_auth.py']}") in out
+    assert f"Also changed: api/routes.py (ID {ids['api/routes.py']}). Check whether it depends on this file." in out
+    assert (repo.root / "tests/test_auth.py").read_bytes() == b"def test_t():\n    assert TIMEOUT == 1440\n"
+    assert (repo.root / "api/routes.py").read_bytes() == b"R = 2\n"  # never rolled back by itself
+
+
+def test_linked_works_from_the_test_side(linked, monkeypatch, capsys):
+    repo, ids = linked
+    _, out = run(repo, monkeypatch, capsys, "rollback", ids["tests/test_auth.py"])
+    assert f"Probably linked: auth.py (ID {ids['auth.py']}) also changed." in out
+
+
+def test_many_files_use_plural_words(linked, monkeypatch, capsys):
+    repo, ids = linked
+    repo.write("api/views.py", "V = 1\n")
+    check(repo)
+    _, out = run(repo, monkeypatch, capsys, "rollback", ids["auth.py"], ids["tests/test_auth.py"])
+    assert "Probably linked" not in out  # both rolled back together
+    assert "api/routes.py" in out and "api/views.py" in out
+    assert "Check whether they depend on these files." in out
+
+
+def test_no_extra_lines_when_nothing_else_changed(linked, monkeypatch, capsys):
+    repo, ids = linked
+    _, out = run(repo, monkeypatch, capsys, "rollback", *ids.values())
+    assert "Probably linked" not in out and "Also changed" not in out
+
+
+def test_no_extra_lines_when_everything_was_refused(session, monkeypatch, capsys):
+    table = check(session)
+    _, out = run(session, monkeypatch, capsys, "rollback", str(table["files"][".env"]["id"]))
+    assert "Probably linked" not in out and "Also changed" not in out and "backups" not in out

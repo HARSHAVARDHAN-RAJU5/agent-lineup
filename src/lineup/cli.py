@@ -220,8 +220,12 @@ def _rollback(args):
         elif undo.action == "nothing":
             word = f"nothing to do: {undo.reason}"
         print(f"{undo.id:<3} {undo.path:<{width}}  {word}")
-    if any(u.action in rollback.DONE for u in undos):
+    done = [u.path for u in undos if u.action in rollback.DONE]
+    if done:
         print("\nYour versions from before this rollback are saved in .git/lineup/backups/.")
+        notes = rollback.other_files_notes(root, table, done, set(ids))
+        if notes:
+            print("\n" + "\n".join(notes))
     return 1 if skipped else 0
 
 

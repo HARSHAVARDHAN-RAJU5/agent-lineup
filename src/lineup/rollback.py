@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from lineup import changes, git, store
+from lineup import changes, git, rules, store
 from lineup.guard import is_private
 
 REFUSE_PRIVATE = "private file (like .env) changed, can't undo this, please check it yourself"
@@ -110,6 +110,48 @@ def apply_undo(root, undo):
     word = DONE[undo.action]
     store.log(root, f"rollback {undo.id}: {undo.path} {word}")
     return word
+
+
+# ---- step 4: advice about other files (no AI, never rolls anything back) ----
+
+def _named(change, table):
+    file_id = table["files"].get(change.path, {}).get("id")
+    return f"{change.path} (ID {file_id})" if file_id else change.path
+
+
+def other_files_notes(root, table, rolled_back, named_ids):
+    """Lines after a rollback: files probably linked by name, and every other file still changed.
+
+    `rolled_back` are the paths actually rolled back; `named_ids` are all IDs the user typed.
+    Returns [] when there's nothing to say.
+    """
+    if not rolled_back:
+        return []
+    named_paths = {path for path, row in table["files"].items() if row.get("id") in named_ids}
+    still = [c for c in changes.find_changes(root, table) if c.path not in named_paths]
+
+    linked = []
+    for path in rolled_back:
+        if changes.file_kind(path) == "test":
+            linked += [c for c in still if c.file_kind != "test" and rules._stem(c.path) == rules.code_name(path)]
+        else:
+            linked += [c for c in still if c.file_kind == "test" and rules.code_name(c.path) == rules._stem(path)]
+    linked = list({c.path: c for c in linked}.values())
+    others = [c for c in still if c.path not in {c.path for c in linked}]
+
+    lines = []
+    if linked:
+        names = ", ".join(_named(c, table) for c in linked)
+        ids = " ".join(str(table["files"][c.path]["id"]) for c in linked if "id" in table["files"].get(c.path, {}))
+        verb, pronoun = ("changed", "it") if len(linked) == 1 else ("changed", "them")
+        tail = f" Roll {pronoun} back too? lineup rollback {ids}" if ids else ""
+        lines.append(f"Probably linked: {names} also {verb}.{tail}")
+    if others:
+        names = ", ".join(_named(c, table) for c in others)
+        subject = "it depends" if len(others) == 1 else "they depend"
+        target = "this file" if len(rolled_back) == 1 else "these files"
+        lines.append(f"Also changed: {names}. Check whether {subject} on {target}.")
+    return lines
 
 
 def _remove_empty_folders(start, root):
