@@ -106,7 +106,8 @@ def test_repo_with_no_commits(repo):
 def test_groups_for_the_example(login_repo):
     claude_edits(login_repo)
     login_repo.write("migrations/0002_sessions.sql", "ALTER TABLE users ADD ttl int;\n")
-    groups = sort_into_groups(find_changes(login_repo.root))
+    groups = {title: [(name, what) for name, what, _ in items]
+              for title, items in sort_into_groups(find_changes(login_repo.root)).items()}
 
     assert ("utils/cache.py", "new file") in groups["Additions"]
     assert ("redis", "new package (requirements.txt)") in groups["Additions"]

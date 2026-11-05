@@ -30,19 +30,56 @@ def project(repo, monkeypatch, tmp_path_factory):
 
 # ---- session start ----
 
-def test_session_start_takes_the_photo_and_tells_the_user(project, monkeypatch, capsys):
+def saved_start(repo):
+    file = repo.root / ".git/lineup/start_message.txt"
+    return file.read_text(encoding="utf-8") if file.is_file() else None
+
+
+def test_session_start_takes_the_photo_and_saves_the_message_for_claude(project, monkeypatch, capsys):
     out = hook(project, monkeypatch, capsys, "start", source="startup")
-    assert out["systemMessage"].startswith("lineup: photo taken at")
-    assert "hookSpecificOutput" not in out  # nothing for the agent
+    assert "systemMessage" not in out  # Claude Code doesn't show it at session start...
+    assert saved_start(project).startswith("≈ lineup: photo taken at")  # ...so it's saved for the next reply
+    assert out["hookSpecificOutput"] == {"hookEventName": "SessionStart", "additionalContext": hooks.SESSION_NOTE}
     assert store.load_table(project.root)["agent"] == "claude"
+
+
+def test_codex_shows_the_session_start_message_right_away(project, monkeypatch, capsys):
+    out = hook(project, monkeypatch, capsys, "start", agent="codex", source="startup")
+    assert out["systemMessage"].startswith("≈ lineup: photo taken at")
+    assert saved_start(project) is None
+
+
+def test_start_message_shows_once_on_top_of_the_next_message(project, monkeypatch, capsys):
+    hook(project, monkeypatch, capsys, "start")
+    project.write("notes.py", "x = 2\n")
+    hook(project, monkeypatch, capsys, "start", source="resume")  # e.g. /clear with an uncommitted edit
+    assert hook(project, monkeypatch, capsys, "stop") == {}  # this reply edited nothing: still silent
+    project.write("notes.py", "x = 3\n")
+    out = hook(project, monkeypatch, capsys, "stop")
+    assert out["systemMessage"].splitlines() == [
+        "≈ lineup: keeping the earlier snapshot, 1 uncommitted file from before this session. Some may be your own edits.",
+        "≈ lineup: 1 file changed (1 LOW). Run lineup risky to see them.",
+    ]
+    project.write("notes.py", "x = 4\n")
+    out = hook(project, monkeypatch, capsys, "stop")
+    assert out["systemMessage"] == "≈ lineup: 1 file changed (1 LOW). Run lineup risky to see them."  # once only
+
+
+def test_session_without_edits_prints_nothing(project, monkeypatch, capsys):
+    hook(project, monkeypatch, capsys, "start")
+    assert hook(project, monkeypatch, capsys, "stop") == {}
+    assert hook(project, monkeypatch, capsys, "stop") == {}
+    hook(project, monkeypatch, capsys, "start", source="startup")  # next session replaces the saved message
+    assert saved_start(project).startswith("≈ lineup: photo taken at")
 
 
 @pytest.mark.parametrize("source", ["resume", "fork", "compact", "clear"])
 def test_resume_fork_and_compact_keep_uncommitted_work(project, monkeypatch, capsys, source):
     hook(project, monkeypatch, capsys, "start", source="startup")
     project.write("notes.py", "x = 2\n")
-    out = hook(project, monkeypatch, capsys, "start", source=source)
-    assert "keeping the earlier snapshot, 1 uncommitted file" in out["systemMessage"]
+    hook(project, monkeypatch, capsys, "start", source=source)
+    assert saved_start(project) == ("≈ lineup: keeping the earlier snapshot, 1 uncommitted file from before this "
+                                    "session. Some may be your own edits.")
 
 
 # ---- end of reply ----
@@ -57,11 +94,15 @@ def test_stop_shows_one_score_line_for_this_reply(project, monkeypatch, capsys):
     project.write("auth.py", "TIMEOUT = 1440\n")
     project.write("notes.py", "x = 2\n")
     out = hook(project, monkeypatch, capsys, "stop", last_assistant_message="done")
-    assert out == {"systemMessage": "lineup: 2 files changed (1 HIGH, 1 LOW). Run lineup risky to see them."}
+    ids = {p: r["id"] for p, r in store.load_table(project.root)["files"].items() if "id" in r}
+    first, *rest = out["systemMessage"].splitlines()
+    assert first.startswith("≈ lineup: photo taken at")  # the saved session-start message, on top once
+    assert rest == ["⚠ ≈ lineup: 1 HIGH", f"  {ids['auth.py']} auth.py  auth or payment file changed",
+                    f"Undo: lineup rollback {ids['auth.py']}"]
     assert hook(project, monkeypatch, capsys, "stop") == {}  # next reply changed nothing: silent
     project.write("notes.py", "x = 3\n")
     out = hook(project, monkeypatch, capsys, "stop")
-    assert out["systemMessage"] == ("lineup: 1 file changed (1 LOW). 2 changed this session. "
+    assert out["systemMessage"] == ("≈ lineup: 1 file changed (1 LOW). 2 changed this session. "
                                     "Run lineup risky to see them.")
 
 
@@ -71,7 +112,7 @@ def test_stop_flags_new_commits_first(project, monkeypatch, capsys):
     project.git("add", "auth.py")
     project.git("commit", "-q", "-m", "agent commit")
     out = hook(project, monkeypatch, capsys, "stop")
-    assert out["systemMessage"] == "lineup: committed: auth.py HIGH. Run lineup risky to see them."
+    assert out["systemMessage"].splitlines()[1:] == ["≈ lineup: committed: auth.py HIGH. Run lineup risky to see them."]
     table = store.load_table(project.root)
     assert table["committed"][0]["path"] == "auth.py"
 
@@ -107,7 +148,7 @@ def test_a_hook_problem_never_breaks_the_agent(project, monkeypatch, capsys):
     hook(project, monkeypatch, capsys, "start")
     monkeypatch.setattr(changes, "find_changes", lambda *a, **k: 1 / 0)
     out = hook(project, monkeypatch, capsys, "stop")
-    assert out["systemMessage"].startswith("lineup: hook skipped (ZeroDivisionError")
+    assert out["systemMessage"].startswith("≈ lineup: hook skipped (ZeroDivisionError")
 
 
 def test_bad_or_empty_stdin_is_fine(project, monkeypatch, capsys):
@@ -144,6 +185,6 @@ def test_rollback_note_survives_into_a_new_session(project, monkeypatch, capsys)
     main(["rollback", ids["auth.py"], ids["notes.py"]])
     out = hook(project, monkeypatch, capsys, "start", source="startup")
     assert out["hookSpecificOutput"]["additionalContext"] == \
-        "Rolled back by the user: auth.py, notes.py. Read them again before editing."
+        hooks.SESSION_NOTE + "\nRolled back by the user: auth.py, notes.py. Read them again before editing."
 
 

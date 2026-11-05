@@ -66,6 +66,14 @@ def rollback_note(root):
 
 # ---- the three hooks ----
 
+SESSION_NOTE = ("This repo uses lineup, a tool that reviews agent changes. The user may run lineup diff, "
+                "lineup risky or lineup rollback with !. Don't comment on or evaluate that output unless the user "
+                "asks. Its scores are meant as a check that's independent of the agent. Rollback takes IDs or file "
+                "names shown by lineup.")
+MAX_HIGH_SHOWN = 5
+PREFIX = "≈ lineup:"  # starts every message lineup shows from a hook
+
+
 def on_session_start(root, event, agent):
     """Session start (startup, resume, clear, compact or fork): take or keep the photo.
 
@@ -75,12 +83,19 @@ def on_session_start(root, event, agent):
     table, kept = snapshot.start_session(root, agent=agent)
     if kept:
         word = "file" if kept == 1 else "files"
-        message = (f"lineup: keeping the earlier snapshot, {kept} uncommitted {word} from before this session. "
-                   "Some may be your own edits. Commit them, or run lineup hook start --fresh to start over.")
+        message = (f"{PREFIX} keeping the earlier snapshot, {kept} uncommitted {word} from before this session. "
+                   "Some may be your own edits.")
     else:
         label = "no commits yet" if table["start_commit"] == git.EMPTY_TREE else table["start_commit"][:7]
-        message = f"lineup: photo taken at {label} ({snapshot.summary(table)})"
-    emit(message, note, "SessionStart")
+        message = f"{PREFIX} photo taken at {label} ({snapshot.summary(table)})"
+    context = SESSION_NOTE + (f"\n{note}" if note else "")
+    if agent == "claude":
+        # Claude Code doesn't display a session-start message, so it's shown once with the next
+        # end-of-reply message instead (and never, if the session makes no edits).
+        store.save_start_message(root, message)
+        emit(None, context, "SessionStart")
+    else:
+        emit(message, context, "SessionStart")  # Codex shows a session-start systemMessage
 
 
 def on_stop(root, event):
@@ -104,8 +119,15 @@ def on_stop(root, event):
         return
 
     parts = []
+    high = []  # (id, path, top rule note) for HIGH files changed in this reply
     if this_reply:
-        levels = [rules.score(rules.rules_for(c, found, root)) for c in this_reply]
+        levels = []
+        for c in this_reply:
+            flags = sorted(rules.rules_for(c, found, root), key=lambda f: -rules.LEVELS[f[0]])
+            level = rules.score(flags)
+            levels.append(level)
+            if level == "HIGH":
+                high.append((now.get(c.path, {}).get("id", "-"), c.path, flags[0][1]))
         counts = ", ".join(f"{levels.count(level)} {level}" for level in ("HIGH", "MED", "LOW") if level in levels)
         word = "file" if len(this_reply) == 1 else "files"
         parts.append(f"{len(this_reply)} {word} changed ({counts})")
@@ -115,7 +137,26 @@ def on_stop(root, event):
         parts.append(f"committed: {names}")
     total = len(found)
     session = f" {total} changed this session." if total != len(this_reply) else ""
-    emit(f"lineup: {'; '.join(parts)}.{session} Run lineup risky to see them.")
+    if high:
+        message = high_list(high, committed and parts[-1])
+    else:
+        message = f"{PREFIX} {'; '.join(parts)}.{session} Run lineup risky to see them."
+    start = store.pop_start_message(root)  # saved at session start, shown once on top
+    emit(f"{start}\n{message}" if start else message)
+
+
+def high_list(high, committed_part=None):
+    """The score message when something is HIGH: each HIGH file's ID, name and rule note, then how to undo."""
+    shown = high[:MAX_HIGH_SHOWN]
+    width = max(len(path) for _, path, _ in shown)
+    lines = [f"\u26a0 {PREFIX} {len(high)} HIGH"]
+    lines += [f"  {file_id} {path:<{width}}  {note}" for file_id, path, note in shown]
+    if len(high) > MAX_HIGH_SHOWN:
+        lines.append(f"  +{len(high) - MAX_HIGH_SHOWN} more")
+    if committed_part:
+        lines.append(f"  ({committed_part})")
+    lines.append(f"Undo: lineup rollback {shown[0][0]}")
+    return "\n".join(lines)
 
 
 def on_prompt(root, event):
@@ -142,7 +183,7 @@ def run_hook(event_name, agent, stream=None):
         else:
             on_prompt(root, event)
     except Exception as error:  # report, but never stop the agent
-        emit(f"lineup: hook skipped ({type(error).__name__}: {error})")
+        emit(f"{PREFIX} hook skipped ({type(error).__name__}: {error})")
     return 0
 
 

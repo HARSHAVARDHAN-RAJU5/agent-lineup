@@ -18,6 +18,7 @@ COPIES = "copies"
 SUMMARIES = "summaries.json"
 BACKUPS = "backups"
 AGENT_NOTE = "agent_note.json"
+START_MESSAGE = "start_message.txt"
 
 
 def folder(root):
@@ -71,6 +72,22 @@ def add_rollback_note(root, paths):
         if path not in current:
             current.append(path)
     _save_json(root, AGENT_NOTE, current)
+
+
+def save_start_message(root, message):
+    """Keep the session-start message to show once with the next end-of-reply message (replaces an older one)."""
+    (folder(root) / START_MESSAGE).write_text(message, encoding="utf-8")
+
+
+def pop_start_message(root):
+    """The saved session-start message, then forget it. None if there's none."""
+    file = folder(root) / START_MESSAGE
+    if not file.is_file():
+        return None
+    try:
+        return file.read_text(encoding="utf-8").strip() or None
+    finally:
+        file.unlink(missing_ok=True)
 
 
 def pop_rollback_note(root):

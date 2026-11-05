@@ -5,16 +5,13 @@ from lineup.cli import main
 
 
 def test_version(capsys):
-    with pytest.raises(SystemExit) as exit_info:
-        main(["--version"])
-    assert exit_info.value.code == 0
-    assert __version__ in capsys.readouterr().out
+    assert main(["--version"]) == 0
+    assert capsys.readouterr().out.endswith(f"lineup {__version__}\n")
 
 
-def test_command_required():
-    with pytest.raises(SystemExit) as exit_info:
-        main([])
-    assert exit_info.value.code == 2
+def test_no_command_shows_help(capsys):
+    assert main([]) == 0
+    assert "usage: lineup" in capsys.readouterr().out
 
 
 def test_diff_outside_a_repo(tmp_path, monkeypatch, capsys):

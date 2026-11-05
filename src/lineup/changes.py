@@ -349,41 +349,55 @@ def _what(change):
 
 
 def sort_into_groups(changes):
-    """Group changes for display: {group: [(name, description)]}."""
+    """Group changes for display: {group: [(name, description, file path)]}."""
+    from lineup.rules import assertions_removed  # here: rules is only needed for display
+
     groups = {"Additions": [], "Removals": [], "Edits": [], "Schema": []}
     for c in changes:
+        def add(title, name, what, path=c.path):
+            groups[title].append((name, what, path))
+
         test = c.file_kind == "test"
         not_read = c.private or c.big or c.binary or c.symlink
         if c.kind == "added":
             what = "new test file" if test else "new file"
-            groups["Additions"].append((c.path, f"{what}, {_what(c)}" if not_read else what))
+            add("Additions", c.path, f"{what}, {_what(c)}" if not_read else what)
         elif c.kind == "deleted":
             what = "test file deleted" if test else "file deleted"
-            groups["Removals"].append((c.path, f"{what}, {_what(c)}" if not_read else what))
+            add("Removals", c.path, f"{what}, {_what(c)}" if not_read else what)
         else:
-            groups["Edits"].append((c.path, _what(c) if c.file_kind in ("code", "private") else f"{c.file_kind}, {_what(c)}"))
+            add("Edits", c.path, _what(c) if c.file_kind in ("code", "private") else f"{c.file_kind}, {_what(c)}")
 
         if c.kind != "deleted":
             for name in c.funcs_added:
                 label = "test added" if test else "function added"
-                groups["Additions"].append((name, f"{label} ({c.path})"))
+                add("Additions", name, f"{label} ({c.path})")
             for dep in c.deps_added:
-                groups["Additions"].append((dep, f"new package ({c.path})"))
+                add("Additions", dep, f"new package ({c.path})")
         if c.kind != "added":
             for name in c.funcs_removed:
                 label = "test removed" if test else "function removed"
-                groups["Removals"].append((name, f"{label} ({c.path})"))
+                add("Removals", name, f"{label} ({c.path})")
+        lost = assertions_removed(c)
+        if lost:
+            add("Removals", "assertion" if lost == 1 else "assertions", f"{lost} removed ({c.path})")
 
         if c.file_kind == "schema":
-            groups["Schema"].append((c.path, c.kind))
+            add("Schema", c.path, c.kind)
     return groups
 
 
-def format_groups(groups, base_label, box=None):
-    """The groups as one table: Group | Name | What, with a line between groups."""
+def format_groups(groups, base_label, box=None, ids=None):
+    """The groups as one table: Group | ID | Name | What, with a line between groups.
+
+    `ids` is {path: ID} (the same IDs as lineup risky); rows about a function, package or assertion
+    show the ID of the file they're in.
+    """
+    ids = ids or {}
     blocks = []
     for title, items in groups.items():
-        rows = items or [("nothing", "")]
-        blocks.append([(title if i == 0 else "", name, what) for i, (name, what) in enumerate(rows)])
-    body = table.draw(("Group", "Name", "What"), blocks, (9, 40, 50), box)
+        rows = items or [("nothing", "", None)]
+        blocks.append([(title if i == 0 else "", "" if path is None else ids.get(path, "-"), name, what)
+                       for i, (name, what, path) in enumerate(rows)])
+    body = table.draw(("Group", "ID", "Name", "What"), blocks, (9, 4, 40, 50), box)
     return f"lineup diff (compared with {base_label})\n\n{body}"

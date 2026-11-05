@@ -9,7 +9,7 @@ import sys
 
 import pytest
 
-from lineup import hookjson, hooks, rules
+from lineup import banner, hookjson, hooks, rules
 from lineup.changes import Change, file_kind
 from lineup.cli import main
 
@@ -29,7 +29,7 @@ def init(capsys, *flags):
     capsys.readouterr()
     code = main(["init", *flags])
     out = capsys.readouterr()
-    return code, out.out + out.err
+    return code, (out.out + out.err).replace(banner.text() + "\n", "", 1)  # the banner comes first
 
 
 def read(repo, rel):

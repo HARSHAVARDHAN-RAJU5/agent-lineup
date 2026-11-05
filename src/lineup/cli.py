@@ -4,7 +4,7 @@ import argparse
 import sys
 import textwrap
 
-from lineup import __version__, changes, git, guard, hooks, llm, rollback, rules, snapshot, store, summary
+from lineup import __version__, banner, changes, git, guard, hooks, llm, rollback, rules, snapshot, store, summary
 from lineup import table as tables
 
 
@@ -80,6 +80,7 @@ def _ai_summary(root, table, found):
 
     result = summary.summarize(root, items, agent, on_ask=say_asking)
     notes = {path: note for path, _, note, _ in items if note}
+    ids = {p: r["id"] for p, r in (table or {}).get("files", {}).items() if "id" in r}
     cut = [path for path, _, _, diff in items if diff.endswith(guard.CUT_MARK)]
     rows = []
     for path in sorted(levels, key=lambda p: (-rules.LEVELS[levels[p]], p)):
@@ -91,7 +92,7 @@ def _ai_summary(root, table, found):
             line = notes[path][:1].upper() + notes[path][1:]
         else:
             line = "no summary yet"
-        rows.append((path, levels[path], line))
+        rows.append((ids.get(path, "-"), path, levels[path], line))
 
     out = []
     if result["overview"]:
@@ -99,7 +100,7 @@ def _ai_summary(root, table, found):
         out.append(f"Summary (AI guess, by {agent})\n{text}\n")
     else:
         out.append(f"Summary unavailable: {result['reason'] or 'no answer'}.\n")
-    out.append(tables.draw(("File", "Risk", "What changed (AI guess)"), [rows], (40, 4, 50)).rstrip("\n"))
+    out.append(tables.draw(("ID", "File", "Risk", "What changed (AI guess)"), [rows], (4, 40, 4, 50)).rstrip("\n"))
     limits = []
     if cut:
         limits.append(f"Not fully summarized: {', '.join(cut)} (diff cut, too long).")
@@ -123,7 +124,8 @@ def _diff(args):
             ai = _ai_summary(root, table, found)
         except Exception:  # the AI part must never stop diff from printing
             ai = "Summary unavailable: unexpected error.\n\n"
-        groups = changes.format_groups(changes.sort_into_groups(found), label)
+        ids = {p: r["id"] for p, r in (table or {}).get("files", {}).items() if "id" in r}
+        groups = changes.format_groups(changes.sort_into_groups(found), label, ids=ids)
         title, _, body = groups.partition("\n\n")
         print(f"{title}\n\n{ai}{body}", end="")
     else:
@@ -220,12 +222,21 @@ def _rollback(args):
         return 1
     last_check = store.load_table(root)  # before refreshing: to spot files changed since the last check
     table, _, _, _ = _collect(root)  # new commits first, so committed files are refused
-    ids = list(dict.fromkeys(args.ids))  # "3 3" counts once
+    resolved, problems_found = [], []
+    for token in args.ids:  # IDs or file names
+        file_id, problem = rollback.resolve(table, token)
+        if problem:
+            problems_found.append(problem)
+        else:
+            resolved.append(file_id)
+    ids = list(dict.fromkeys(resolved))  # "3 3" (or "3 auth.py") counts once
     unknown = [i for i in ids if i not in rollback.valid_ids(table)]
-    if unknown:  # probably a typo: change nothing
+    if problems_found or unknown:  # a typo or an unclear name: change nothing
         valid = ", ".join(str(i) for i in rollback.valid_ids(table)) or "none yet (run lineup risky first)"
-        names = ", ".join(str(i) for i in unknown)
-        print(f"No file with ID {names}. Valid IDs: {valid}. Nothing was changed.")
+        lines = [f"{problem[:1].upper()}{problem[1:]}." for problem in problems_found]
+        if unknown:
+            lines.append(f"No file with ID {', '.join(str(i) for i in unknown)}.")
+        print(" ".join(lines) + f" Valid IDs: {valid}. Nothing was changed.")
         return 1
 
     undos = [rollback.plan_undo(root, table, i, last_check) for i in ids]
@@ -277,6 +288,7 @@ def _confirm(args, question, flag):
 
 
 def _init(args):
+    banner.show()
     root = _root()
     if root is None:
         return 2
@@ -294,6 +306,9 @@ def _init(args):
         print(f"  {rel}")
         for event, command in added:
             print(f"    {event:<17} {command}")
+    if any(event == "SessionStart" for _, added in plan.values() for event, _ in added):
+        note = textwrap.fill(hooks.SESSION_NOTE, 76, initial_indent="    ", subsequent_indent="    ")
+        print(f"\nAt each session start, the agent is also given this note:\n{note}")
     if not _confirm(args, "Write these changes?", ""):
         return 1
     hooks.write_plan(root, plan)
@@ -324,7 +339,7 @@ def _init_remove(root, args):
     if not _confirm(args, "Remove them?", "--remove "):
         return 1
     hooks.write_plan(root, plan)
-    print("\nDone. lineup's hooks are removed.")
+    print("\nDone. lineup's hooks are removed, so the agent no longer gets lineup's session-start note either.")
     return 0
 
 
@@ -333,8 +348,8 @@ def build_parser():
         prog="lineup",
         description="See what your coding agent just changed, which edits are risky, and undo a file.",
     )
-    parser.add_argument("--version", action="version", version=f"lineup {__version__}")
-    sub = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument("--version", action="store_true", help="show the version and exit")
+    sub = parser.add_subparsers(dest="command")
 
     init = sub.add_parser("init", help="install the session hooks in this repo")
     init.add_argument("--agent", choices=["both", *llm.AGENTS], default="both", help="which agent's hooks (default: both)")
@@ -345,7 +360,8 @@ def build_parser():
     sub.add_parser("risky", help="score each change HIGH / MED / LOW").set_defaults(func=_risky)
 
     undo = sub.add_parser("rollback", help="undo one or more files by ID")
-    undo.add_argument("ids", nargs="+", type=int, help="file IDs from `lineup risky`")
+    undo.add_argument("ids", nargs="+", metavar="id_or_file",
+                      help="file IDs or names from lineup risky / diff, e.g. 3 or auth.py")
     undo.set_defaults(func=_rollback)
 
     hook = sub.add_parser("hook", help="run by the agent's hooks (start: photo, stop: score line, prompt: notes)")
@@ -358,7 +374,15 @@ def build_parser():
 
 
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.version or args.command is None:
+        banner.show()
+        if args.version:
+            print(f"lineup {__version__}")
+        else:
+            parser.print_help()
+        return 0
     try:
         return args.func(args)
     except (OSError, ValueError, git.GitError) as error:  # one clear line, never a Python traceback

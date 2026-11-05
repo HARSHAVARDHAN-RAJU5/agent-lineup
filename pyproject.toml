@@ -20,5 +20,8 @@ lineup = "lineup.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+lineup = ["lineup-banner.txt"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

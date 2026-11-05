@@ -123,6 +123,16 @@ def linked_code(test_change, all_changes):
             if c.file_kind != "test" and c.path != test_change.path and _stem(c.path) == name]
 
 
+def assertions_removed(change):
+    """How many assertions a test file lost (removed minus added; commented-out ones count as removed)."""
+    if change.file_kind != "test" or change.kind == "deleted" or not change.diff:
+        return 0
+    lines = _changed_lines(change)
+    removed = sum(1 for line in lines if line.startswith("-") and _is_assert(line[1:]))
+    added = sum(1 for line in lines if line.startswith("+") and _is_assert(line[1:]))
+    return max(0, removed - added)
+
+
 def test_rules(change, all_changes):
     """Rules for test files only, as [(level, reason)]. Other files get []."""
     if change.file_kind != "test":

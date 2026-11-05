@@ -4,6 +4,7 @@ Never reads, writes or deletes anything behind a link or outside the repo (see p
 """
 
 import os
+import posixpath
 import stat
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -41,6 +42,27 @@ class UnknownId(Exception):
 def valid_ids(table):
     """IDs that can be named in `lineup rollback`: files changed or committed this session."""
     return sorted(row["id"] for row in table["files"].values() if "id" in row)
+
+
+def resolve(table, token):
+    """Turn what the user typed (an ID like 3, or a name like auth.py) into an ID.
+
+    Returns (id, None), or (None, problem) when nothing or more than one file matches.
+    """
+    named = {path: row["id"] for path, row in table["files"].items() if "id" in row}
+    text = token.strip().replace("\\", "/")
+    if text.isdigit():
+        return int(text), None
+    text = text[2:] if text.startswith("./") else text
+    if text in named:
+        return named[text], None
+    matches = sorted((named[p], p) for p in named if posixpath.basename(p) == text or p.endswith("/" + text))
+    if len(matches) == 1:
+        return matches[0][0], None
+    if matches:
+        listed = ", ".join(f"{i} {p}" for i, p in matches)
+        return None, f"{token} matches more than one file: {listed}. Use the ID."
+    return None, f"no changed file named {token}"
 
 
 def _row_for(table, file_id):
