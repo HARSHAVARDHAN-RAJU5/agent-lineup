@@ -124,7 +124,7 @@ from lineup.rollback import apply_undo  # noqa: E402
 
 
 def roll_back(repo, table, path):
-    return apply_undo(repo.root, undo_for(repo, table, path))
+    return apply_undo(repo.root, undo_for(repo, table, path), "run1")
 
 
 def test_files_go_back_byte_for_byte_with_a_backup(session):
@@ -141,9 +141,9 @@ def test_files_go_back_byte_for_byte_with_a_backup(session):
     assert not (root / "utils").exists()  # the empty folder went too
 
     ids = {path: table["files"][path]["id"] for path in ("auth/session.py", "notes.py", "utils/cache.py")}
-    assert store.read_backup(root, ids["auth/session.py"], "auth/session.py") == b"TIMEOUT = 1440\n"
-    assert store.read_backup(root, ids["notes.py"], "notes.py") == b"start\nagent line\n"
-    assert store.read_backup(root, ids["utils/cache.py"], "utils/cache.py") == b"def get(key):\n    return None\n"
+    assert store.read_backup(root, "run1", "auth/session.py") == b"TIMEOUT = 1440\n"
+    assert store.read_backup(root, "run1", "notes.py") == b"start\nagent line\n"
+    assert store.read_backup(root, "run1", "utils/cache.py") == b"def get(key):\n    return None\n"
 
 
 def test_after_rollback_diff_shows_no_change_for_those_files(session):
@@ -180,12 +180,12 @@ def test_committing_removes_the_backup(session):
     table = check(session)
     roll_back(session, table, "notes.py")
     file_id = table["files"]["notes.py"]["id"]
-    assert store.read_backup(session.root, file_id, "notes.py") is not None
+    assert store.read_backup(session.root, "run1", "notes.py") is not None
     session.write("notes.py", "start\nfinal\n")
     session.git("add", "notes.py")
     session.git("commit", "-q", "-m", "notes")
     check(session)
-    assert store.read_backup(session.root, file_id, "notes.py") is None
+    assert store.read_backup(session.root, "run1", "notes.py") is None
 
 
 # ---- step 3: the lineup rollback command ----

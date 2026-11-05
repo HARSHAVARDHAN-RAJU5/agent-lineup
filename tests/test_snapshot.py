@@ -31,8 +31,8 @@ def test_photo_records_start_commit(project):
 def test_only_unfinished_files_are_copied(project):
     table = snapshot.take(project.root)
     files = table["files"]
-    assert files["notes.py"] == {"at_start": "uncommitted", "copy": True}
-    assert files["draft.md"] == {"at_start": "uncommitted", "copy": True}
+    assert {k: v for k, v in files["notes.py"].items() if k != "mode"} == {"at_start": "uncommitted", "copy": True}
+    assert {k: v for k, v in files["draft.md"].items() if k != "mode"} == {"at_start": "uncommitted", "copy": True}
     assert "auth/session.py" not in files  # committed: the commit ID is enough
     assert store.read_copy(project.root, "notes.py") == b"todo = ['finish login']\n"
     assert store.read_copy(project.root, "auth/session.py") is None

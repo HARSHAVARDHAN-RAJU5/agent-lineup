@@ -130,7 +130,8 @@ def _diff(args):
         title, _, body = groups.partition("\n\n")
         print(f"{title}\n\n{ai}{body}", end="")
     else:
-        print(f"lineup diff: no changes since the {'photo' if table else 'last commit'}")
+        print(_no_changes("diff", root, table))
+    _print_staged(root, found)
     if table is None:
         _no_photo(root)
     return 0
@@ -176,7 +177,7 @@ def _risky(args):
     table, found, _, label = _collect(root)
     committed = committed_rows(table)
     if not found and not committed:
-        print(f"lineup risky: no changes since the {'photo' if table else 'last commit'}")
+        print(_no_changes("risky", root, table))
     else:
         print(f"lineup risky (compared with {label})\n")
     if found:
@@ -187,9 +188,30 @@ def _risky(args):
     if committed:
         print("\nCommitted (lineup can't roll these back; use git to undo them)\n")
         print(tables.draw(("Commit", "File", "Risk", "Why (rule)"), [[r] for r in committed], (7, 40, 4, 50)), end="")
+    _print_staged(root, found or committed)
     if table is None:
         _no_photo(root)
     return 0
+
+
+def _no_changes(command, root, table):
+    since = "photo" if table else "last commit"
+    if git.staged_differs(root):  # never say "no changes" while a staged copy still differs
+        return f"lineup {command}: no changes in your files since the {since}, but a staged copy still has a change:"
+    return f"lineup {command}: no changes since the {since}"
+
+
+def _print_staged(root, shown_something):
+    lines = staged_note(root)
+    if lines:
+        print(("\n" if shown_something else "") + "\n".join(lines))
+
+
+def staged_note(root, only=None):
+    """Warning lines for files whose staged copy still differs from the file on disk."""
+    staged = sorted(p for p in git.staged_differs(root) if only is None or p in only)
+    return [f"The staged copy of {p} still has the old change. Run git restore --staged {p} before committing."
+            for p in staged]
 
 
 def _rollback(args):
@@ -199,6 +221,7 @@ def _rollback(args):
     if not store.has_snapshot(root):
         print("No snapshot from the session start, so rollback could wipe your own work. Nothing was changed.")
         return 1
+    last_check = store.load_table(root)  # before refreshing: to spot files changed since the last check
     table, _, _, _ = _collect(root)  # new commits first, so committed files are refused
     ids = list(dict.fromkeys(args.ids))  # "3 3" counts once
     unknown = [i for i in ids if i not in rollback.valid_ids(table)]
@@ -208,25 +231,35 @@ def _rollback(args):
         print(f"No file with ID {names}. Valid IDs: {valid}. Nothing was changed.")
         return 1
 
-    undos = [rollback.plan_undo(root, table, i) for i in ids]
+    undos = [rollback.plan_undo(root, table, i, last_check) for i in ids]
+    run = rollback.new_backup_run(root)
     width = max(len(u.path) for u in undos)
     print("lineup rollback\n")
-    skipped = False
+    problems = False
     for undo in undos:
-        word = rollback.apply_undo(root, undo)
+        word = rollback.apply_undo(root, undo, run)
         if undo.action == "refuse":
-            skipped = True
+            problems = True
             word = f"skipped: {undo.reason}"
         elif undo.action == "nothing":
             word = f"nothing to do: {undo.reason}"
+        elif word.startswith("failed"):
+            problems = True
         print(f"{undo.id:<3} {undo.path:<{width}}  {word}")
+        if undo.action in rollback.DONE and not word.startswith("failed"):
+            for warning in undo.warnings:
+                print(f"{'':<3} {'':<{width}}  Warning: {warning}")
     done = [u.path for u in undos if u.action in rollback.DONE]
+    if store.backup_run_exists(root, run):
+        print(f"\nYour versions from before this rollback are saved in .git/lineup/backups/{run}/.")
+    staged = staged_note(root, set(done))
+    if staged:
+        print("\n" + "\n".join(staged))
     if done:
-        print("\nYour versions from before this rollback are saved in .git/lineup/backups/.")
         notes = rollback.other_files_notes(root, table, done, set(ids))
         if notes:
             print("\n" + "\n".join(notes))
-    return 1 if skipped else 0
+    return 1 if problems else 0
 
 
 def build_parser():
@@ -256,7 +289,11 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except (OSError, ValueError, git.GitError) as error:  # one clear line, never a Python traceback
+        print(f"lineup: {error}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

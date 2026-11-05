@@ -44,7 +44,7 @@ def _name_only(change):
     if change.private or is_private(change.path):
         return "private, contents not read"
     if getattr(change, "symlink", False):
-        return "symbolic link, not followed"
+        return "link, not followed"
     if change.file_kind == "lockfile":
         return "lockfile changed, contents left out"
     if change.big:

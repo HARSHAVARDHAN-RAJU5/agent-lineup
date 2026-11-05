@@ -35,6 +35,11 @@ def check(repo):
     return flagged, found, store.load_table(repo.root)
 
 
+def plain(row):
+    """A table row without the bookkeeping keys added in Phase 6 (seen fingerprint, file mode)."""
+    return {k: v for k, v in row.items() if k not in ("seen", "mode")}
+
+
 def ids(table):
     return {path: row["id"] for path, row in table["files"].items() if "id" in row}
 
@@ -57,7 +62,7 @@ def test_file_put_back_is_marked_unchanged_but_keeps_id(project):
     check(project)
     project.write("app.py", "TIMEOUT = 30\n")
     _, _, table = check(project)
-    assert table["files"]["app.py"] == {"id": 2, "status": "unchanged"}
+    assert plain(table["files"]["app.py"]) == {"id": 2, "status": "unchanged"}
 
 
 def test_no_new_commit_flags_nothing(project):

@@ -5,6 +5,7 @@ The only module that reads or writes that folder. It saves and loads; it never d
 
 import json
 import os
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -77,21 +78,32 @@ def _copy_path(root, path):
     return folder(root).joinpath(COPIES, *_safe_parts(path))
 
 
-def _backup_path(root, file_id, path):
-    return folder(root).joinpath(BACKUPS, str(int(file_id)), *_safe_parts(path))
+def _backup_path(root, run, path):
+    if not re.fullmatch(r"[0-9A-Za-z_-]+", str(run)):
+        raise ValueError(f"unsafe backup folder: {run}")
+    return folder(root).joinpath(BACKUPS, str(run), *_safe_parts(path))
 
 
-def save_backup(root, file_id, path, data):
-    """Keep the version a rollback is about to replace. One backup per ID: a new one replaces the old."""
-    shutil.rmtree(folder(root) / BACKUPS / str(int(file_id)), ignore_errors=True)
-    target = _backup_path(root, file_id, path)
+def backup_run_exists(root, run):
+    return (folder(root) / BACKUPS / str(run)).exists()
+
+
+def save_backup(root, run, path, data):
+    """Keep the version a rollback is about to replace, in that rollback's own folder. Never overwrites."""
+    target = _backup_path(root, run, path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(data)
 
 
-def read_backup(root, file_id, path):
-    target = _backup_path(root, file_id, path)
+def read_backup(root, run, path):
+    target = _backup_path(root, run, path)
     return target.read_bytes() if target.is_file() else None
+
+
+def backup_runs(root):
+    """Backup folder names, oldest first."""
+    backups = folder(root) / BACKUPS
+    return sorted(p.name for p in backups.iterdir() if p.is_dir()) if backups.is_dir() else []
 
 
 def delete_backups(root, path):

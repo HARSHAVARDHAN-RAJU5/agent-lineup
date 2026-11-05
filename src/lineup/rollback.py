@@ -1,10 +1,15 @@
-"""Undo files by ID, from the session photo. No AI. Step 1: decide what undoing means (reads only)."""
+"""Undo files by ID, from the session photo. No AI.
+
+Never reads, writes or deletes anything behind a link or outside the repo (see paths.py).
+"""
 
 import os
-from dataclasses import dataclass
+import stat
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
-from lineup import changes, git, rules, store
+from lineup import changes, git, paths, rules, store
 from lineup.guard import is_private
 
 REFUSE_PRIVATE = "private file (like .env) changed, can't undo this, please check it yourself"
@@ -12,6 +17,10 @@ REFUSE_COPY = "copy of a private file, can't undo this, please check it yourself
 REFUSE_BIG = "big file, no copy was kept, so it can't be rolled back"
 REFUSE_LINK = "symlink, not followed, so it can't be rolled back"
 REFUSE_COMMITTED = "committed, lineup can't undo it; use git to undo"
+REFUSE_OUTSIDE = "outside the repo, lineup never touches it"
+REFUSE_FOLDER = "a folder now has this name, so nothing was changed. Move the folder away first to get the file back"
+WARN_CHANGED = ("This file changed since lineup last checked it, and it may include your edits. "
+                "Your current version is saved in backups.")
 
 
 @dataclass
@@ -21,6 +30,8 @@ class Undo:
     action: str  # "restore", "bring back", "delete", "refuse" or "nothing"
     before: bytes = None  # the version to write back (restore / bring back)
     reason: str = ""  # why it's refused, or why there's nothing to do
+    executable: bool = False  # bring back with the executable permission
+    warnings: list = field(default_factory=list)
 
 
 class UnknownId(Exception):
@@ -40,8 +51,29 @@ def _row_for(table, file_id):
     raise UnknownId(f"no file with ID {file_id}. Valid IDs: {ids}")
 
 
-def plan_undo(root, table, file_id):
-    """What undoing file `file_id` would do. Reads only; changes nothing on disk."""
+def _blocked(root, path):
+    """Why writing `path` is impossible or unsafe, or None."""
+    reason = paths.unsafe(root, path)
+    if reason == paths.OUTSIDE:
+        return REFUSE_OUTSIDE
+    if reason:
+        return f"{reason}, so it can't be rolled back"
+    file = Path(root, path)
+    if file.is_dir():
+        return REFUSE_FOLDER
+    parent = file.parent
+    while parent != Path(root) and not parent.exists():
+        parent = parent.parent
+    if parent != Path(root) and not parent.is_dir():
+        return f"a file now has the name of its folder ({parent.relative_to(root).as_posix()}), so nothing was changed"
+    return None
+
+
+def plan_undo(root, table, file_id, last_check=None):
+    """What undoing file `file_id` would do. Reads only; changes nothing on disk.
+
+    `last_check` is the table as it was before this command, to spot files changed since the last check.
+    """
     path, row = _row_for(table, file_id)
     file = Path(root, path)
     at_start = row.get("at_start")
@@ -49,6 +81,9 @@ def plan_undo(root, table, file_id):
     def refuse(reason):
         return Undo(file_id, path, "refuse", reason=reason)
 
+    blocked = _blocked(root, path)  # first: never look behind a link or outside the repo
+    if blocked:
+        return refuse(blocked)
     if row.get("status") == "committed":
         return refuse(REFUSE_COMMITTED)
     if at_start == "symlink" or changes.is_link(file):
@@ -62,50 +97,83 @@ def plan_undo(root, table, file_id):
     if changes.is_copy_of_private(file, changes.private_fingerprints(root, table["files"])):
         return refuse(REFUSE_COPY)
 
-    # The "before": the saved copy, nothing (didn't exist), or git at the start (or at a later commit).
+    # The "before": the saved copy, nothing (didn't exist), or git (exactly as git would write it).
+    executable = False
     if at_start == "uncommitted":
         before = store.read_copy(root, path)
         if before is None:
             return refuse("the saved copy is missing, so it can't be rolled back")
+        executable = bool(row.get("mode", 0) & 0o111)
     elif at_start == "missing":
         before = None
     else:
-        before = git.show_file(root, row.get("base", table["start_commit"]), path)
+        rev = row.get("base", table["start_commit"])
+        before = git.checkout_bytes(root, rev, path)
+        executable = git.file_mode(root, rev, path) == "100755"
 
     exists_now = os.path.lexists(file)
     if before is None:
-        if exists_now:
-            return Undo(file_id, path, "delete")
-        return Undo(file_id, path, "nothing", reason="already gone, as at the start")
-    if not exists_now:
-        return Undo(file_id, path, "bring back", before=before)
-    if file.read_bytes() == before:
-        return Undo(file_id, path, "nothing", reason="already the same as at the start")
-    return Undo(file_id, path, "restore", before=before)
+        undo = Undo(file_id, path, "delete") if exists_now else \
+            Undo(file_id, path, "nothing", reason="already gone, as at the start")
+    elif not exists_now:
+        undo = Undo(file_id, path, "bring back", before=before, executable=executable)
+    elif file.read_bytes() == before:
+        undo = Undo(file_id, path, "nothing", reason="already the same as at the start")
+    else:
+        undo = Undo(file_id, path, "restore", before=before)
+
+    seen = ((last_check or {}).get("files", {}).get(path) or {}).get("seen")
+    if undo.action in DONE and seen and seen != changes.seen_fingerprint(root, path):
+        undo.warnings.append(WARN_CHANGED)
+    return undo
 
 
-# ---- step 2: back up, then write back or delete ----
+# ---- back up, then write back or delete ----
 
 DONE = {"restore": "restored", "bring back": "brought back", "delete": "deleted"}
 
 
-def apply_undo(root, undo):
-    """Carry out a plan from plan_undo(). Backs up the current file first. Returns a short result word."""
+def new_backup_run(root):
+    """A fresh backup folder name for one rollback run, like 2026-11-05_143012 (never reused)."""
+    name = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    run, n = name, 2
+    while store.backup_run_exists(root, run):
+        run, n = f"{name}-{n}", n + 1
+    return run
+
+
+def apply_undo(root, undo, run):
+    """Carry out a plan from plan_undo(). Backs up the current file into backup folder `run` first.
+
+    Returns a short result word. Never raises for a file problem: it returns "failed: ..." instead.
+    """
     if undo.action not in DONE:
         word = "refused" if undo.action == "refuse" else "nothing to do"
         store.log(root, f"rollback {undo.id}: {undo.path} {word}")
         return word
 
-    file = Path(root, undo.path)
-    if file.is_file() and not changes.is_link(file):
-        store.save_backup(root, undo.id, undo.path, file.read_bytes())  # so the undo can be undone
+    blocked = _blocked(root, undo.path)  # check again right before touching the disk
+    if blocked:
+        undo.action, undo.reason = "refuse", blocked
+        store.log(root, f"rollback {undo.id}: {undo.path} refused")
+        return "refused"
 
-    if undo.action == "delete":
-        file.unlink()
-        _remove_empty_folders(file.parent, Path(root))
-    else:
-        file.parent.mkdir(parents=True, exist_ok=True)
-        file.write_bytes(undo.before)
+    file = Path(root, undo.path)
+    try:
+        if file.is_file() and not changes.is_link(file):
+            store.save_backup(root, run, undo.path, file.read_bytes())  # so the undo can be undone
+        if undo.action == "delete":
+            file.unlink()
+            _remove_empty_folders(file.parent, Path(root))
+        else:
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_bytes(undo.before)
+            if undo.action == "bring back" and undo.executable:
+                os.chmod(file, stat.S_IMODE(os.stat(file).st_mode) | 0o111)
+    except OSError as error:
+        word = f"failed: {error.strerror or error}"
+        store.log(root, f"rollback {undo.id}: {undo.path} failed")
+        return word
 
     word = DONE[undo.action]
     store.log(root, f"rollback {undo.id}: {undo.path} {word}")

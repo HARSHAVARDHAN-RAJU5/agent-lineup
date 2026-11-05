@@ -3,13 +3,18 @@
 from datetime import datetime
 from pathlib import Path
 
-from lineup import changes, git, rules, store
+from lineup import changes, git, paths, rules, store
 from lineup.guard import is_private, private_pathspecs
 
 
 def _row(root, path, secret_hashes=frozenset()):
     """What to keep about one file that isn't committed. A copy of a private file only gets a fingerprint."""
     file = Path(root, path)
+    reason = paths.unsafe(root, path)
+    if reason == paths.OUTSIDE:
+        return None  # never copy anything outside the repo
+    if reason and paths.link_in_folders(root, path):  # behind a linked folder: nothing is read
+        return {"at_start": "symlink"}
     if changes.is_link(file):  # never follow it: keep only where it points
         return {"at_start": "symlink", "link": changes.link_hash(file)}
     if not file.is_file():
@@ -22,7 +27,7 @@ def _row(root, path, secret_hashes=frozenset()):
     if stat.st_size > changes.BIG_FILE_BYTES:
         return {"at_start": "big", "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
     store.save_copy(root, path, file.read_bytes())
-    return {"at_start": "uncommitted", "copy": True}
+    return {"at_start": "uncommitted", "copy": True, "mode": stat.st_mode & 0o777}
 
 
 def take(root, keep=False):
@@ -42,10 +47,14 @@ def take(root, keep=False):
     not_committed = sorted(set([path for _, path in git.changed_files(root, base)] + git.untracked_files(root)))
     secret_hashes = changes.private_fingerprints(root, old_rows, not_committed)
     for path in not_committed:
-        files[path] = _row(root, path, secret_hashes)
+        row = _row(root, path, secret_hashes)
+        if row:
+            files[path] = row
     for path in git.ignored_files(root, private_pathspecs()):  # names only: private ones get a fingerprint
         if is_private(path):
-            files[path] = _row(root, path)
+            row = _row(root, path)
+            if row:
+                files[path] = row
 
     table = {
         "start_commit": base,
@@ -117,6 +126,11 @@ def record_check(root, table, found):
             row["id"] = table["next_id"]
             table["next_id"] += 1
         row["status"] = "changed"
+        seen = changes.seen_fingerprint(root, change.path)  # lets rollback spot edits made after this check
+        if seen:
+            row["seen"] = seen
+        else:
+            row.pop("seen", None)
         changed.add(change.path)
     for path, row in table["files"].items():
         if row.get("status") == "changed" and path not in changed:

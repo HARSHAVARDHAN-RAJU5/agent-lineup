@@ -72,6 +72,41 @@ def show_file(root, rev, path):
     return result.stdout if result.returncode == 0 else None
 
 
+def checkout_bytes(root, rev, path):
+    """File contents at `rev` exactly as git would write them on checkout (core.autocrlf, .gitattributes).
+
+    None if it didn't exist there.
+    """
+    result = _run(["cat-file", "--filters", f"{rev}:{path}"], root, check=False)
+    return result.stdout if result.returncode == 0 else None
+
+
+def file_mode(root, rev, path):
+    """Git's mode for `path` at `rev`, like "100644" or "100755" (executable). None if not there."""
+    result = _run(["ls-tree", "-z", rev, "--", path], root, check=False)
+    entry = result.stdout.decode("utf-8", "replace").split("\0")[0]
+    return entry.split(" ", 1)[0] if result.returncode == 0 and entry else None
+
+
+def staged_differs(root):
+    """Files whose staged copy (index) differs from both the last commit and the file on disk."""
+    out = _run(["status", "--porcelain=v1", "-z", "--untracked-files=no"], root).stdout.decode("utf-8", "replace")
+    paths = set()
+    entries = out.split("\0")
+    i = 0
+    while i < len(entries):
+        entry = entries[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        x, y, path = entry[0], entry[1], entry[3:]
+        if x in "RC":
+            i += 1  # the old name follows a rename/copy
+        if x not in " ?" and y not in " ?":
+            paths.add(path)
+    return paths
+
+
 def blob_size(root, rev, path):
     """Size in bytes of a file at `rev`, or None if it didn't exist there."""
     result = _run(["cat-file", "-s", f"{rev}:{path}"], root, check=False)

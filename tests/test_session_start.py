@@ -19,6 +19,11 @@ def project(repo, monkeypatch):
     monkeypatch.chdir(repo.root)
     return repo
 
+def plain(row):
+    """A table row without the bookkeeping keys added in Phase 6 (seen fingerprint, file mode)."""
+    return {k: v for k, v in row.items() if k not in ("seen", "mode")}
+
+
 
 def output(capsys, argv):
     assert main(argv) == 0
@@ -54,8 +59,8 @@ def test_new_session_keeps_photo_with_uncommitted_changes(project, capsys):
     table = store.load_table(project.root)
     assert table["start_commit"] == first["start_commit"]
     assert table["taken_at"] == first["taken_at"]
-    assert table["files"]["a.py"] == {"id": 1, "status": "changed"}  # still flagged, still on the undo list
-    assert table["files"]["b.py"] == {"id": 2, "status": "changed"}
+    assert plain(table["files"]["a.py"]) == {"id": 1, "status": "changed"}  # still flagged, still on the undo list
+    assert plain(table["files"]["b.py"]) == {"id": 2, "status": "changed"}
     assert {c.path for c in find_changes(project.root, table)} == {"a.py", "b.py"}
 
 
@@ -120,7 +125,7 @@ def test_fresh_always_takes_new_photo(project, capsys):
 
     assert out.startswith("lineup: photo taken at")
     table = store.load_table(project.root)
-    assert table["files"] == {"a.py": {"at_start": "uncommitted", "copy": True}}
+    assert {p: plain(r) for p, r in table["files"].items()} == {"a.py": {"at_start": "uncommitted", "copy": True}}
     assert store.read_copy(project.root, "a.py") == b"a = 2  # session 1\n"
 
 

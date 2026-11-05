@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from lineup import functions, git, store, table
+from lineup import functions, git, paths, store, table
 from lineup.guard import is_private, private_pathspecs
 
 BIG_FILE_BYTES = 10 * 1024 * 1024
@@ -105,8 +105,8 @@ def fingerprint(file):
 
 
 def is_link(file):
-    """True for a symbolic link (a shortcut). Checked without opening it."""
-    return os.path.islink(file)
+    """True for a symlink or a Windows junction (a shortcut). Checked without opening it."""
+    return paths.is_link(file)
 
 
 def read_link(file):
@@ -186,14 +186,16 @@ def _build(root, path, kind, old_size, load_old, new_size=None, load_new=None):
 SECRET_COPY_MAX_BYTES = 1024 * 1024  # private files are small; don't fingerprint big files for this
 
 
-def private_fingerprints(root, rows=None, paths=()):
+def private_fingerprints(root, rows=None, changed=()):
     """Fingerprints of every private file we know: from the photo, and private files on disk now."""
     hashes = {r["hash"] for r in (rows or {}).values() if r.get("at_start") == "private" and r.get("hash")}
-    names = {p for p in paths if is_private(p)}
+    names = {p for p in changed if is_private(p)}
     names.update(p for p in git.ignored_files(root, private_pathspecs()) if is_private(p))
     names.update(p for p in git.tracked_files(root, private_pathspecs()) if is_private(p))
     for name in names:
         file = Path(root, name)
+        if paths.unsafe(root, name):
+            continue  # never follow a link, even inside the repo
         if not is_link(file) and file.is_file() and file.stat().st_size > 0:
             hashes.add(fingerprint(file))
     return hashes
@@ -205,6 +207,19 @@ def is_copy_of_private(file, hashes):
         return False  # a private name is just private, not a "copy"
     size = file.stat().st_size
     return 0 < size <= SECRET_COPY_MAX_BYTES and fingerprint(file) in hashes
+
+
+def seen_fingerprint(root, path):
+    """What lineup saw of a changed file at a check: its fingerprint, "deleted", or None if not fingerprinted
+    (private, behind a link, outside the repo, or big)."""
+    file = Path(root, path)
+    if paths.unsafe(root, path) or is_private(path) or is_link(file):
+        return None
+    if not os.path.lexists(file):
+        return "deleted"
+    if not file.is_file() or file.stat().st_size > BIG_FILE_BYTES:
+        return None
+    return fingerprint(file)
 
 
 def _private_copy(path, kind):
@@ -223,6 +238,15 @@ def _compare(root, base, row, path, secret_hashes=frozenset()):
     A file with the same bytes as a private file (`secret_hashes`) is treated as private and never read.
     """
     file = Path(root, path)
+    reason = paths.unsafe(root, path)
+    if reason == paths.OUTSIDE:
+        return None  # never read anything outside the repo
+    if reason and paths.link_in_folders(root, path):  # e.g. a folder replaced by a junction
+        at_start = (row or {}).get("at_start")
+        existed = at_start not in (None, "missing") or git.blob_size(root, (row or {}).get("base", base), path) is not None
+        kind = _kind(existed, os.path.lexists(file)) or "modified"
+        return Change(path=path, kind=kind, file_kind="private" if is_private(path) else file_kind(path),
+                      private=is_private(path), symlink=True)
     if is_link(file):
         return _link_change(root, base, row, path, file)
     exists_now = file.is_file()
@@ -311,7 +335,7 @@ def find_changes(root, table=None):
 
 def _what(change):
     if change.symlink:
-        return "symbolic link, not followed"
+        return "link, not followed"
     if change.private:
         return "private, contents not read"
     if change.big:

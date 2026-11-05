@@ -33,7 +33,7 @@ def test_link_is_sent_by_name_only(repo, fake_link):
     assert link.symlink and link.diff == "" and link.kind == "added"
     message = build_message(ai_input(list(found.values()), {})[0])
     assert "abc123" not in message
-    assert "--- notes.txt (LOW): symbolic link, not followed" in message
+    assert "--- notes.txt (LOW): link, not followed" in message
 
 
 def test_photo_keeps_only_where_a_link_points(repo, fake_link):
@@ -77,4 +77,4 @@ def test_real_symlink_to_env(repo, tmp_path_factory):
     found = find_changes(repo.root, store.load_table(repo.root))
     message = build_message(ai_input(found, {})[0])
     assert "abc123" not in message
-    assert "notes.txt (LOW): symbolic link, not followed" in message
+    assert "notes.txt (LOW): link, not followed" in message
