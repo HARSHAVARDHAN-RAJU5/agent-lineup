@@ -186,3 +186,74 @@ def test_committing_removes_the_backup(session):
     session.git("commit", "-q", "-m", "notes")
     check(session)
     assert store.read_backup(session.root, file_id, "notes.py") is None
+
+
+# ---- step 3: the lineup rollback command ----
+
+from lineup.cli import main  # noqa: E402
+
+
+def run(repo, monkeypatch, capsys, *argv):
+    monkeypatch.chdir(repo.root)
+    capsys.readouterr()
+    code = main(list(argv))
+    return code, capsys.readouterr().out
+
+
+def test_command_rolls_back_one_or_many(session, monkeypatch, capsys):
+    table = check(session)
+    ids = {path: str(row["id"]) for path, row in table["files"].items() if "id" in row}
+    code, out = run(session, monkeypatch, capsys, "rollback", ids["auth/session.py"])
+    assert code == 0 and "auth/session.py  restored" in out
+    code, out = run(session, monkeypatch, capsys, "rollback", ids["utils/cache.py"], ids["old.py"],
+                    ids["utils/cache.py"])
+    assert code == 0 and out.count("utils/cache.py") == 1  # repeated IDs count once
+    assert "deleted" in out and "brought back" in out
+    assert "saved in .git/lineup/backups/" in out
+    _, out = run(session, monkeypatch, capsys, "diff")
+    assert "auth/session.py" not in out and "utils/cache.py" not in out
+
+
+def test_skipped_file_does_not_stop_the_others(session, monkeypatch, capsys):
+    table = check(session)
+    ids = {path: str(row["id"]) for path, row in table["files"].items() if "id" in row}
+    code, out = run(session, monkeypatch, capsys, "rollback", ids[".env"], ids["notes.py"])
+    assert code == 1
+    assert ".env" in out and "skipped: private file (like .env) changed" in out
+    assert "notes.py  restored" in out
+    assert (session.root / "notes.py").read_bytes() == b"start\n"
+
+
+def test_unknown_id_changes_nothing(session, monkeypatch, capsys):
+    table = check(session)
+    good = str(table["files"]["notes.py"]["id"])
+    before = disk(session)
+    code, out = run(session, monkeypatch, capsys, "rollback", good, "33")
+    assert code == 1
+    assert "No file with ID 33. Valid IDs: 1, 2, 3, 4, 5. Nothing was changed." in out
+    assert disk(session) == before
+
+
+def test_no_photo_refuses(repo, monkeypatch, capsys):
+    repo.write("app.py", "x = 1\n")
+    repo.commit()
+    repo.write("app.py", "x = 2\n")
+    code, out = run(repo, monkeypatch, capsys, "rollback", "1")
+    assert code == 1 and "No snapshot from the session start" in out
+    assert (repo.root / "app.py").read_bytes() == b"x = 2\n"
+
+
+def test_file_committed_just_before_is_refused(session, monkeypatch, capsys):
+    table = check(session)
+    file_id = str(table["files"]["auth/session.py"]["id"])
+    session.git("add", "auth/session.py")
+    session.git("commit", "-q", "-m", "agent commit")  # no lineup check in between
+    code, out = run(session, monkeypatch, capsys, "rollback", file_id)
+    assert code == 1 and "committed, lineup can't undo it; use git to undo" in out
+    assert (session.root / "auth/session.py").read_bytes() == b"TIMEOUT = 1440\n"
+
+
+def test_no_ids_is_an_error(capsys):
+    with pytest.raises(SystemExit) as exit_info:
+        main(["rollback"])
+    assert exit_info.value.code == 2

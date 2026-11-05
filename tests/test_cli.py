@@ -17,7 +17,7 @@ def test_command_required():
     assert exit_info.value.code == 2
 
 
-@pytest.mark.parametrize("argv", [["init"], ["rollback", "3", "4"]])
+@pytest.mark.parametrize("argv", [["init"]])
 def test_commands_parse(argv, capsys):
     assert main(argv) == 1
     assert "not built yet" in capsys.readouterr().out

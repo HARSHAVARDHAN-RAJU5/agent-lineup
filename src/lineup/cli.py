@@ -4,7 +4,7 @@ import argparse
 import sys
 import textwrap
 
-from lineup import __version__, changes, git, guard, llm, rules, snapshot, store, summary
+from lineup import __version__, changes, git, guard, llm, rollback, rules, snapshot, store, summary
 from lineup import table as tables
 
 
@@ -192,6 +192,39 @@ def _risky(args):
     return 0
 
 
+def _rollback(args):
+    root = _root()
+    if root is None:
+        return 2
+    if not store.has_snapshot(root):
+        print("No snapshot from the session start, so rollback could wipe your own work. Nothing was changed.")
+        return 1
+    table, _, _, _ = _collect(root)  # new commits first, so committed files are refused
+    ids = list(dict.fromkeys(args.ids))  # "3 3" counts once
+    unknown = [i for i in ids if i not in rollback.valid_ids(table)]
+    if unknown:  # probably a typo: change nothing
+        valid = ", ".join(str(i) for i in rollback.valid_ids(table)) or "none yet (run lineup risky first)"
+        names = ", ".join(str(i) for i in unknown)
+        print(f"No file with ID {names}. Valid IDs: {valid}. Nothing was changed.")
+        return 1
+
+    undos = [rollback.plan_undo(root, table, i) for i in ids]
+    width = max(len(u.path) for u in undos)
+    print("lineup rollback\n")
+    skipped = False
+    for undo in undos:
+        word = rollback.apply_undo(root, undo)
+        if undo.action == "refuse":
+            skipped = True
+            word = f"skipped: {undo.reason}"
+        elif undo.action == "nothing":
+            word = f"nothing to do: {undo.reason}"
+        print(f"{undo.id:<3} {undo.path:<{width}}  {word}")
+    if any(u.action in rollback.DONE for u in undos):
+        print("\nYour versions from before this rollback are saved in .git/lineup/backups/.")
+    return 1 if skipped else 0
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="lineup",
@@ -204,9 +237,9 @@ def build_parser():
     sub.add_parser("diff", help="show what changed since the snapshot").set_defaults(func=_diff)
     sub.add_parser("risky", help="score each change HIGH / MED / LOW").set_defaults(func=_risky)
 
-    rollback = sub.add_parser("rollback", help="undo one or more files by ID")
-    rollback.add_argument("ids", nargs="+", type=int, help="file IDs from `lineup risky`")
-    rollback.set_defaults(func=_not_built)
+    undo = sub.add_parser("rollback", help="undo one or more files by ID")
+    undo.add_argument("ids", nargs="+", type=int, help="file IDs from `lineup risky`")
+    undo.set_defaults(func=_rollback)
 
     hook = sub.add_parser("hook", help="run by the agent's hooks (start: take the photo)")
     hook.add_argument("event", choices=["start"])
