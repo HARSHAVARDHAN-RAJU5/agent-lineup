@@ -226,3 +226,4 @@ Both need the agent's session logs, which differ between Claude and Codex.
 - **Possible breakage score:** MED.
 - **Default models:** Haiku for Claude. Codex uses its own default model, because a ChatGPT login rejects `gpt-5.4-mini` (found Nov 5).
 - **Hook output:** after each reply the hook shows only the fast rule-based score line. The AI runs only on `lineup diff` (answers saved). Make it automatic later, after testing.
+- **Fork:** a forked session keeps the same photo, like resume (Nov 5).

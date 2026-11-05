@@ -45,7 +45,10 @@ def file_rules(change):
     if kind == "auth":
         flags.append(("HIGH", "auth or payment file changed"))
     if path.startswith(AGENT_AND_CI):
-        flags.append(("HIGH", "CI or agent settings changed"))
+        if change.lineup_hooks_only:  # `lineup init` / `--remove`: nothing else in the file changed
+            flags.append(("LOW", "lineup's own hooks (lineup init)"))
+        else:
+            flags.append(("HIGH", "CI or agent settings changed"))
     if _install_script(change):
         flags.append(("HIGH", "install script changed"))
     if kind == "schema":

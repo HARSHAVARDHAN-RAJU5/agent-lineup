@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from lineup import functions, git, paths, store, table
+from lineup import functions, git, hookjson, paths, store, table
 from lineup.guard import is_private, private_pathspecs
 
 BIG_FILE_BYTES = 10 * 1024 * 1024
@@ -29,6 +29,7 @@ class Change:
     binary: bool = False
     symlink: bool = False  # never followed: only where it points is compared
     copy_of_private: bool = False  # same bytes as a private file (e.g. .env renamed to settings.txt)
+    lineup_hooks_only: bool = False  # an agent settings file where only lineup's own hooks changed
     lines_added: int = 0
     lines_removed: int = 0
     diff: str = ""  # never filled for private, big, binary or symlink files
@@ -178,6 +179,8 @@ def _build(root, path, kind, old_size, load_old, new_size=None, load_new=None):
     change.lines_added = sum(1 for line in body if line.startswith("+"))
     change.lines_removed = sum(1 for line in body if line.startswith("-"))
     change.diff = "\n".join(diff)
+    if path in hookjson.SETTINGS_FILES:
+        change.lineup_hooks_only = hookjson.only_lineup_changed(old_text, new_text)
     change.funcs_added, change.funcs_removed = functions.function_changes(path, old_text, new_text)
     change.deps_added = functions.new_dependencies(path, old_text, new_text)
     return change

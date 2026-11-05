@@ -4,13 +4,8 @@ import argparse
 import sys
 import textwrap
 
-from lineup import __version__, changes, git, guard, llm, rollback, rules, snapshot, store, summary
+from lineup import __version__, changes, git, guard, hooks, llm, rollback, rules, snapshot, store, summary
 from lineup import table as tables
-
-
-def _not_built(args):
-    print(f"lineup {args.command}: not built yet")
-    return 1
 
 
 def _root():
@@ -26,6 +21,8 @@ def _commit_label(commit):
 
 
 def _hook(args):
+    if args.event != "start" or (args.agent and not args.fresh):  # called by Claude Code / Codex
+        return hooks.run_hook(args.event, args.agent)
     root = _root()
     if root is None:
         return 2
@@ -250,6 +247,8 @@ def _rollback(args):
             for warning in undo.warnings:
                 print(f"{'':<3} {'':<{width}}  Warning: {warning}")
     done = [u.path for u in undos if u.action in rollback.DONE]
+    if done:
+        store.add_rollback_note(root, done)  # the agent is told on its next turn (phase 7 hooks)
     if store.backup_run_exists(root, run):
         print(f"\nYour versions from before this rollback are saved in .git/lineup/backups/{run}/.")
     staged = staged_note(root, set(done))
@@ -259,7 +258,74 @@ def _rollback(args):
         notes = rollback.other_files_notes(root, table, done, set(ids))
         if notes:
             print("\n" + "\n".join(notes))
+        if hooks.installed(root):
+            print("\nThe agent will be told on your next message that these files were rolled back.")
     return 1 if problems else 0
+
+
+def _confirm(args, question, flag):
+    """True to go ahead: --yes, or the user says yes. Never asks when there's no one to answer."""
+    if args.yes:
+        return True
+    if not sys.stdin.isatty():
+        print(f"\nNothing was written. Run lineup init {flag}--yes to do it.")
+        return False
+    if input(f"\n{question} [y/N] ").strip().lower() in ("y", "yes"):
+        return True
+    print("Nothing was written.")
+    return False
+
+
+def _init(args):
+    root = _root()
+    if root is None:
+        return 2
+    if args.remove:
+        return _init_remove(root, args)
+    agents = ["claude", "codex"] if args.agent == "both" else [args.agent]
+    plan = hooks.plan_init(root, agents)
+    if not plan:
+        print("lineup hooks are already installed. Nothing to change.")
+        for warning in hooks.tracked_warnings(root):
+            print(warning)
+        return 0
+    print("lineup init will add these hooks (your other settings stay as they are):\n")
+    for rel, (_, added) in plan.items():
+        print(f"  {rel}")
+        for event, command in added:
+            print(f"    {event:<17} {command}")
+    if not _confirm(args, "Write these changes?", ""):
+        return 1
+    hooks.write_plan(root, plan)
+    excluded = [rel for rel in plan if hooks.keep_out_of_git(root, rel)]
+    print("\nDone.")
+    if excluded:
+        print(f"Kept out of git (added to .git/info/exclude): {', '.join(excluded)}")
+    for warning in hooks.tracked_warnings(root):
+        print(warning)
+    if any(rel.startswith(".claude") for rel in plan):
+        print("Claude Code: the hooks load in your next session (or run /hooks to check them).")
+    if any(rel.startswith(".codex") for rel in plan):
+        print("Codex: open Codex in this repo and run /hooks to review and trust the lineup hooks. "
+              "They don't run until you trust them.")
+    return 0
+
+
+def _init_remove(root, args):
+    plan = hooks.plan_remove(root)
+    if not plan:
+        print("No lineup hooks found. Nothing to remove.")
+        return 0
+    print("lineup init --remove will take out only lineup's hooks (everything else stays):\n")
+    for rel, (data, removed) in plan.items():
+        print(f"  {rel}{'  (only lineup was in it, so the file is deleted)' if data is None else ''}")
+        for event, command in removed:
+            print(f"    {event:<17} {command}")
+    if not _confirm(args, "Remove them?", "--remove "):
+        return 1
+    hooks.write_plan(root, plan)
+    print("\nDone. lineup's hooks are removed.")
+    return 0
 
 
 def build_parser():
@@ -270,7 +336,11 @@ def build_parser():
     parser.add_argument("--version", action="version", version=f"lineup {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("init", help="install the session hooks in this repo").set_defaults(func=_not_built)
+    init = sub.add_parser("init", help="install the session hooks in this repo")
+    init.add_argument("--agent", choices=["both", *llm.AGENTS], default="both", help="which agent's hooks (default: both)")
+    init.add_argument("--yes", action="store_true", help="write without asking")
+    init.add_argument("--remove", action="store_true", help="remove lineup's hooks (and nothing else)")
+    init.set_defaults(func=_init)
     sub.add_parser("diff", help="show what changed since the snapshot").set_defaults(func=_diff)
     sub.add_parser("risky", help="score each change HIGH / MED / LOW").set_defaults(func=_risky)
 
@@ -278,8 +348,8 @@ def build_parser():
     undo.add_argument("ids", nargs="+", type=int, help="file IDs from `lineup risky`")
     undo.set_defaults(func=_rollback)
 
-    hook = sub.add_parser("hook", help="run by the agent's hooks (start: take the photo)")
-    hook.add_argument("event", choices=["start"])
+    hook = sub.add_parser("hook", help="run by the agent's hooks (start: photo, stop: score line, prompt: notes)")
+    hook.add_argument("event", choices=["start", "stop", "prompt"])
     hook.add_argument("--fresh", action="store_true", help="always take a new photo")
     hook.add_argument("--agent", choices=list(llm.AGENTS), help="the agent running this session")
     hook.set_defaults(func=_hook)

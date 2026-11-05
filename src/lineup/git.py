@@ -130,6 +130,16 @@ def files_using(root, word, exclude=()):
     return _split_z(result.stdout) if result.returncode == 0 else []
 
 
+def is_tracked(root, path):
+    """True if git tracks `path` (it's in the index)."""
+    return _run(["ls-files", "--error-unmatch", "--", path], root, check=False).returncode == 0
+
+
+def is_ignored(root, path):
+    """True if .gitignore, .git/info/exclude or the global excludes file ignore `path`."""
+    return _run(["check-ignore", "-q", "--no-index", "--", path], root, check=False).returncode == 0
+
+
 def tracked_files(root, only=None):
     """Files git tracks (names only). `only` is a list of git patterns."""
     args = ["ls-files", "-z"]

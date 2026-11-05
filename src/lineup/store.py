@@ -17,6 +17,7 @@ DIARY = "audit.log"
 COPIES = "copies"
 SUMMARIES = "summaries.json"
 BACKUPS = "backups"
+AGENT_NOTE = "agent_note.json"
 
 
 def folder(root):
@@ -60,6 +61,28 @@ def load_summaries(root):
 
 def save_summaries(root, data):
     _save_json(root, SUMMARIES, data)
+
+
+def add_rollback_note(root, paths):
+    """Remember files the user rolled back, so the agent is told on its next turn (kept across photos)."""
+    file = folder(root) / AGENT_NOTE
+    current = json.loads(file.read_text(encoding="utf-8")) if file.is_file() else []
+    for path in paths:
+        if path not in current:
+            current.append(path)
+    _save_json(root, AGENT_NOTE, current)
+
+
+def pop_rollback_note(root):
+    """The rolled-back files waiting to be told to the agent, then forget them. [] if none."""
+    file = folder(root) / AGENT_NOTE
+    if not file.is_file():
+        return []
+    try:
+        paths = json.loads(file.read_text(encoding="utf-8"))
+    finally:
+        file.unlink(missing_ok=True)
+    return paths if isinstance(paths, list) else []
 
 
 def clear_summaries(root):

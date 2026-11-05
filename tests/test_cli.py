@@ -17,12 +17,6 @@ def test_command_required():
     assert exit_info.value.code == 2
 
 
-@pytest.mark.parametrize("argv", [["init"]])
-def test_commands_parse(argv, capsys):
-    assert main(argv) == 1
-    assert "not built yet" in capsys.readouterr().out
-
-
 def test_diff_outside_a_repo(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     assert main(["diff"]) == 2
