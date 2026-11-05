@@ -38,8 +38,12 @@ CUT_MARK = "... (diff cut, too long)"
 
 def _name_only(change):
     """Why a file is sent by name only, or None if its diff may be sent."""
+    if getattr(change, "copy_of_private", False):
+        return "copy of a private file, contents not read"
     if change.private or is_private(change.path):
         return "private, contents not read"
+    if getattr(change, "symlink", False):
+        return "symbolic link, not followed"
     if change.file_kind == "lockfile":
         return "lockfile changed, contents left out"
     if change.big:

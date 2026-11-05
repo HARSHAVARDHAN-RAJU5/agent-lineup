@@ -2,6 +2,7 @@
 
 import difflib
 import hashlib
+import os
 import posixpath
 import re
 from dataclasses import dataclass, field
@@ -26,9 +27,11 @@ class Change:
     private: bool = False
     big: bool = False
     binary: bool = False
+    symlink: bool = False  # never followed: only where it points is compared
+    copy_of_private: bool = False  # same bytes as a private file (e.g. .env renamed to settings.txt)
     lines_added: int = 0
     lines_removed: int = 0
-    diff: str = ""  # never filled for private, big or binary files
+    diff: str = ""  # never filled for private, big, binary or symlink files
     funcs_added: list = field(default_factory=list)
     funcs_removed: list = field(default_factory=list)
     deps_added: list = field(default_factory=list)
@@ -101,6 +104,43 @@ def fingerprint(file):
     return digest.hexdigest()
 
 
+def is_link(file):
+    """True for a symbolic link (a shortcut). Checked without opening it."""
+    return os.path.islink(file)
+
+
+def read_link(file):
+    """Where a link points, as bytes. Reads the link itself, never the file it points to."""
+    return os.fsencode(os.readlink(file))
+
+
+def link_hash(file):
+    """Fingerprint of where a link points (never of what it points to)."""
+    return hashlib.sha256(read_link(file)).hexdigest()
+
+
+def _link_change(root, base, row, path, file):
+    """A path that is a symlink now: compare only where it points. Never opens the target."""
+    target = read_link(file)
+    at_start = (row or {}).get("at_start")
+    if at_start == "symlink":
+        if hashlib.sha256(target).hexdigest() == row.get("link"):
+            return None
+        kind = "modified"
+    elif at_start == "missing":
+        kind = "added"
+    elif at_start:
+        kind = "modified"
+    else:
+        old = git.show_file(root, (row or {}).get("base", base), path)  # git stores a link as its target
+        if old == target:
+            return None
+        kind = "added" if old is None else "modified"
+    private = is_private(path)
+    return Change(path=path, kind=kind, file_kind="private" if private else file_kind(path),
+                  private=private, symlink=True)
+
+
 def _build(root, path, kind, old_size, load_old, new_size=None, load_new=None):
     """Compare the before and after of one file. Returns None if nothing really changed.
 
@@ -112,6 +152,9 @@ def _build(root, path, kind, old_size, load_old, new_size=None, load_new=None):
         return change  # never read a private file
     file = Path(root, path)
     if new_size is None:
+        if kind != "deleted" and is_link(file):
+            change.symlink = True
+            return change  # never follow a link
         new_size = file.stat().st_size if kind != "deleted" else 0
         load_new = file.read_bytes
     if max(old_size, new_size) > BIG_FILE_BYTES:
@@ -140,17 +183,54 @@ def _build(root, path, kind, old_size, load_old, new_size=None, load_new=None):
     return change
 
 
+SECRET_COPY_MAX_BYTES = 1024 * 1024  # private files are small; don't fingerprint big files for this
+
+
+def private_fingerprints(root, rows=None, paths=()):
+    """Fingerprints of every private file we know: from the photo, and private files on disk now."""
+    hashes = {r["hash"] for r in (rows or {}).values() if r.get("at_start") == "private" and r.get("hash")}
+    names = {p for p in paths if is_private(p)}
+    names.update(p for p in git.ignored_files(root, private_pathspecs()) if is_private(p))
+    names.update(p for p in git.tracked_files(root, private_pathspecs()) if is_private(p))
+    for name in names:
+        file = Path(root, name)
+        if not is_link(file) and file.is_file() and file.stat().st_size > 0:
+            hashes.add(fingerprint(file))
+    return hashes
+
+
+def is_copy_of_private(file, hashes):
+    """True if `file` has exactly the same bytes as a private file. Hashes it; never reads it as text."""
+    if not hashes or is_private(Path(file).name) or is_link(file) or not file.is_file():
+        return False  # a private name is just private, not a "copy"
+    size = file.stat().st_size
+    return 0 < size <= SECRET_COPY_MAX_BYTES and fingerprint(file) in hashes
+
+
+def _private_copy(path, kind):
+    return Change(path=path, kind=kind, file_kind="private", private=True, copy_of_private=True)
+
+
 def _kind(existed, exists_now):
     if not existed:
         return "added" if exists_now else None
     return "modified" if exists_now else "deleted"
 
 
-def _compare(root, base, row, path):
-    """Find the "before" of one file (photo first, then git) and compare it with now."""
+def _compare(root, base, row, path, secret_hashes=frozenset()):
+    """Find the "before" of one file (photo first, then git) and compare it with now.
+
+    A file with the same bytes as a private file (`secret_hashes`) is treated as private and never read.
+    """
     file = Path(root, path)
+    if is_link(file):
+        return _link_change(root, base, row, path, file)
     exists_now = file.is_file()
     at_start = (row or {}).get("at_start")
+
+    if at_start == "symlink":  # was a link in the photo: nothing of it was read, so name only
+        return Change(path=path, kind=_kind(True, exists_now), file_kind=file_kind(path),
+                      private=is_private(path), symlink=True)
 
     if at_start == "private":  # only a fingerprint in the photo
         if exists_now and fingerprint(file) == row["hash"]:
@@ -167,10 +247,14 @@ def _compare(root, base, row, path):
     if at_start == "uncommitted":  # a saved copy in the photo
         data = store.read_copy(root, path) or b""
         kind = _kind(True, exists_now)
+        if kind != "deleted" and is_copy_of_private(file, secret_hashes):
+            return _private_copy(path, kind)
         return _build(root, path, kind, len(data), lambda: data)
 
     if at_start == "missing":  # already gone when the photo was taken
         kind = _kind(False, exists_now)
+        if kind and is_copy_of_private(file, secret_hashes):
+            return _private_copy(path, kind)
         return _build(root, path, kind, 0, lambda: b"") if kind else None
 
     rev = (row or {}).get("base", base)  # not in the photo: git has the "before"
@@ -178,6 +262,11 @@ def _compare(root, base, row, path):
     kind = _kind(old_size is not None, exists_now)
     if not kind:
         return None
+    if kind != "deleted" and is_copy_of_private(file, secret_hashes):
+        before = git.show_file(root, rev, path) if kind == "modified" else None
+        if before is not None and hashlib.sha256(before).hexdigest() == fingerprint(file):
+            return None  # unchanged since the photo (only hashed, never read as text)
+        return _private_copy(path, kind)
     return _build(root, path, kind, old_size or 0, lambda: git.show_file(root, rev, path))
 
 
@@ -209,9 +298,10 @@ def find_changes(root, table=None):
     if table:  # a hidden private file created after the photo
         paths.update(p for p in git.ignored_files(root, private_pathspecs()) if is_private(p))
 
+    secret_hashes = private_fingerprints(root, rows, paths)
     found = []
     for path in sorted(paths):
-        change = _compare(root, base, rows.get(path), path)
+        change = _compare(root, base, rows.get(path), path, secret_hashes)
         if change:
             found.append(change)
     return found
@@ -220,6 +310,8 @@ def find_changes(root, table=None):
 # ---- sorting into groups ----
 
 def _what(change):
+    if change.symlink:
+        return "symbolic link, not followed"
     if change.private:
         return "private, contents not read"
     if change.big:
@@ -234,7 +326,7 @@ def sort_into_groups(changes):
     groups = {"Additions": [], "Removals": [], "Edits": [], "Schema": []}
     for c in changes:
         test = c.file_kind == "test"
-        not_read = c.private or c.big or c.binary
+        not_read = c.private or c.big or c.binary or c.symlink
         if c.kind == "added":
             what = "new test file" if test else "new file"
             groups["Additions"].append((c.path, f"{what}, {_what(c)}" if not_read else what))

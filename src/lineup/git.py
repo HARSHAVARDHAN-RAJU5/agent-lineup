@@ -95,6 +95,14 @@ def files_using(root, word, exclude=()):
     return _split_z(result.stdout) if result.returncode == 0 else []
 
 
+def tracked_files(root, only=None):
+    """Files git tracks (names only). `only` is a list of git patterns."""
+    args = ["ls-files", "-z"]
+    if only:
+        args += ["--", *only]
+    return _split_z(_run(args, root).stdout)
+
+
 def ignored_files(root, only=None):
     """Files hidden by .gitignore, including files inside hidden folders (names only).
 

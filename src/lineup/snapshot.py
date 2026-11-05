@@ -7,13 +7,17 @@ from lineup import changes, git, rules, store
 from lineup.guard import is_private, private_pathspecs
 
 
-def _row(root, path):
-    """What to keep about one file that isn't committed."""
+def _row(root, path, secret_hashes=frozenset()):
+    """What to keep about one file that isn't committed. A copy of a private file only gets a fingerprint."""
     file = Path(root, path)
+    if changes.is_link(file):  # never follow it: keep only where it points
+        return {"at_start": "symlink", "link": changes.link_hash(file)}
     if not file.is_file():
         return {"at_start": "missing"}
     if is_private(path):
         return {"at_start": "private", "hash": changes.fingerprint(file)}
+    if changes.is_copy_of_private(file, secret_hashes):  # e.g. .env renamed to settings.txt
+        return {"at_start": "private", "hash": changes.fingerprint(file), "copy_of_private": True}
     stat = file.stat()
     if stat.st_size > changes.BIG_FILE_BYTES:
         return {"at_start": "big", "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
@@ -28,15 +32,17 @@ def take(root, keep=False):
         store.log(root, f"photo kept (taken {table['taken_at']} at {table['start_commit'][:7]})")
         return table
 
+    old_rows = store.load_table(root).get("files", {})  # carries private fingerprints forward
     store.clear_copies(root)
     store.clear_summaries(root)  # new session: old AI answers no longer apply
     head = git.head_commit(root)
     base = head or git.EMPTY_TREE
 
     files = {}
-    not_committed = [path for _, path in git.changed_files(root, base)] + git.untracked_files(root)
-    for path in sorted(set(not_committed)):
-        files[path] = _row(root, path)
+    not_committed = sorted(set([path for _, path in git.changed_files(root, base)] + git.untracked_files(root)))
+    secret_hashes = changes.private_fingerprints(root, old_rows, not_committed)
+    for path in not_committed:
+        files[path] = _row(root, path, secret_hashes)
     for path in git.ignored_files(root, private_pathspecs()):  # names only: private ones get a fingerprint
         if is_private(path):
             files[path] = _row(root, path)

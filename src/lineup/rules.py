@@ -36,7 +36,9 @@ def file_rules(change):
     kind = change.file_kind
 
     # HIGH
-    if change.private:
+    if change.copy_of_private:
+        flags.append(("HIGH", "copy of a private file, contents not read"))
+    elif change.private:
         flags.append(("HIGH", ".env or key file changed, contents not read"))
     if kind == "auth":
         flags.append(("HIGH", "auth or payment file changed"))
