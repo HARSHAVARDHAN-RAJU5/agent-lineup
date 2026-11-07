@@ -30,7 +30,7 @@ python -m pipx ensurepath
 Open a new terminal, then:
 
 ```
-pipx install git+https://github.com/HARSHAVARDHAN-RAJU5/agent-lineup
+pipx install agent-lineup
 cd your-repo
 lineup init --agent claude
 ```

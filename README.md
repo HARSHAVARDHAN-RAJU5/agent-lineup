@@ -38,7 +38,7 @@ Also changed: .env (ID 1), test_utils.py (ID 3), utils.py (ID 4). Check whether 
 Needs Python 3.10 or newer, git, and [pipx](https://pipx.pypa.io).
 
 ```
-pipx install git+https://github.com/HARSHAVARDHAN-RAJU5/agent-lineup
+pipx install agent-lineup
 cd your-repo
 lineup init --agent claude
 ```
@@ -48,8 +48,8 @@ Use `--agent codex` if you use Codex, or leave `--agent` out for both.
 `lineup init` shows the hooks it will add and asks before writing. Then start a new Claude Code session. In Codex, run `/hooks` and trust the lineup hooks.
 
 - No pipx: `python -m pip install --user pipx`, then `python -m pipx ensurepath`, then open a new terminal.
-- No git: the install fails with "Cannot find command 'git'". Install git first.
-- Upgrade: `pipx upgrade agent-lineup`. If it says it's already up to date, run `pipx install --force git+https://github.com/HARSHAVARDHAN-RAJU5/agent-lineup`.
+- No git: lineup says "git isn't installed or isn't on your PATH". Install git first.
+- Upgrade: `pipx upgrade agent-lineup`.
 - Uninstall: run `lineup init --remove` in each repo first, then `pipx uninstall agent-lineup`. To delete lineup's saved data too, delete the `.git/lineup` folder in each repo.
 
 ## Commands
