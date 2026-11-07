@@ -92,4 +92,4 @@ pip install -e ".[dev]"
 pytest
 ```
 
-Plan: [docs/plan.md](https://github.com/HARSHAVARDHAN-RAJU5/agent-lineup/blob/main/docs/plan.md). Testers: [docs/testers.md](https://github.com/HARSHAVARDHAN-RAJU5/agent-lineup/blob/main/docs/testers.md).
+Testers: [docs/testers.md](https://github.com/HARSHAVARDHAN-RAJU5/agent-lineup/blob/main/docs/testers.md).
