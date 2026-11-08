@@ -48,7 +48,7 @@ def test_init_writes_local_claude_and_codex_files_kept_out_of_git(project, capsy
     claude = read(project, CLAUDE)
     assert commands(claude, "Stop") == ["lineup hook stop --agent claude || echo {}"]
     assert claude["hooks"]["SessionStart"][0]["matcher"] == "startup|resume|clear|compact|fork"
-    assert commands(read(project, CODEX), "UserPromptSubmit") == ["lineup hook prompt --agent codex || echo {}"]
+    assert commands(read(project, CODEX), "UserPromptSubmit") == [hooks._command("prompt", "codex")]
     exclude = (project.root / ".git/info/exclude").read_text()
     assert f"/{CLAUDE}" in exclude and f"/{CODEX}" in exclude
     assert project.git("status", "--porcelain") == ""  # nothing new for git to commit
@@ -154,11 +154,92 @@ def test_hook_command_is_quiet_when_lineup_is_not_installed(tmp_path):
         assert result.stdout.strip() == "{}"  # valid "nothing to say" JSON for Claude and Codex
 
 
-@pytest.mark.skipif(os.name != "nt", reason="cmd.exe is Windows-only")
-def test_hook_command_is_quiet_in_cmd_too(tmp_path):
-    result = subprocess.run(["cmd", "/c", hooks._command("stop", "codex")], capture_output=True, text=True,
-                            env={**os.environ, "PATH": str(tmp_path)})
-    assert result.returncode == 0 and result.stdout.strip() == "{}"
+def _windows_path(tmp_path):
+    system = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32")
+    return os.pathsep.join([str(tmp_path), system, os.path.join(system, "WindowsPowerShell", "v1.0")])
+
+
+@pytest.mark.skipif(os.name != "nt", reason="PowerShell 5.1 and cmd.exe are Windows-only")
+def test_codex_hook_runs_in_windows_powershell(tmp_path):
+    """Codex on Windows runs hooks in PowerShell 5.1: the old `||` line fails there, the cmd-wrapped one works."""
+    env = {**os.environ, "PATH": _windows_path(tmp_path)}  # no lineup on PATH
+    for event in ("start", "stop", "prompt"):
+        command = hooks._command(event, "codex")
+        result = subprocess.run(["powershell", "-NoProfile", "-Command", command], capture_output=True, text=True,
+                                env=env)
+        assert result.returncode == 0 and result.stdout.strip() == "{}", command
+    old = "lineup hook stop --agent codex || echo {}"
+    assert subprocess.run(["powershell", "-NoProfile", "-Command", old], capture_output=True, env=env).returncode != 0
+
+
+# ---- Codex hook commands on Windows vs Mac/Linux ----
+
+def test_windows_codex_hooks_are_wrapped_in_cmd():
+    for event in ("start", "stop", "prompt"):
+        assert hooks._command(event, "codex", windows=True) == f'cmd /c "lineup hook {event} --agent codex || echo {{}}"'
+    text = json.dumps({"hooks": hooks.codex_hooks(windows=True)}, indent=2)
+    assert r'"command": "cmd /c \"lineup hook stop --agent codex || echo {}\""' in text  # escaped once in JSON
+    assert json.loads(text)["hooks"]["Stop"][0]["hooks"][0]["command"] == hooks._command("stop", "codex", windows=True)
+
+
+def test_mac_linux_codex_and_all_claude_hooks_are_unchanged():
+    for event in ("start", "stop", "prompt"):
+        assert hooks._command(event, "codex", windows=False) == f"lineup hook {event} --agent codex || echo {{}}"
+        for windows in (True, False):
+            assert hooks._command(event, "claude", windows=windows) == f"lineup hook {event} --agent claude || echo {{}}"
+
+
+OLD_CODEX = {"hooks": {  # what lineup 0.1.0 wrote, plus the user's own hooks
+    "SessionStart": [{"hooks": [{"type": "command", "command": "lineup hook start --agent codex || echo {}",
+                                 "timeout": 60}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "lineup hook prompt --agent codex || echo {}",
+                                     "timeout": 30}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "echo mine"},
+                        {"type": "command", "command": "lineup hook stop --agent codex || echo {}", "timeout": 60}]}],
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "echo also-mine"}]}],
+}, "other": {"keep": True}}
+
+
+@pytest.fixture
+def windows(monkeypatch):
+    monkeypatch.setattr(hooks, "_command", lambda event, agent, windows=None, _real=hooks._command:
+                        _real(event, agent, True))
+
+
+def test_init_over_0_1_0_hooks_leaves_exactly_one_set(project, capsys, windows):
+    project.write(CODEX, json.dumps(OLD_CODEX))
+    code, out = init(capsys, "--yes", "--agent", "codex")
+    assert code == 0
+    data = read(project, CODEX)
+    lineup_lines = [c for event in data["hooks"] for c in commands(data, event) if "lineup hook" in c]
+    assert sorted(lineup_lines) == sorted(hooks._command(e, "codex") for e in ("start", "stop", "prompt"))
+    assert all(c.startswith('cmd /c "') for c in lineup_lines)
+    assert "echo mine" in commands(data, "Stop") and commands(data, "PreToolUse") == ["echo also-mine"]
+    assert data["other"] == {"keep": True}
+    assert "replacing lineup's older hooks:" in out and 'cmd /c "lineup hook stop --agent codex || echo {}"' in out
+    assert init(capsys, "--yes", "--agent", "codex")[1].startswith("lineup hooks are already installed")
+
+
+@pytest.mark.parametrize("old_form", [True, False])
+def test_remove_cleans_old_and_new_forms(project, capsys, windows, old_form):
+    project.write(CODEX, json.dumps(OLD_CODEX))
+    if not old_form:
+        init(capsys, "--yes", "--agent", "codex")
+    code, out = init(capsys, "--remove", "--yes")
+    assert code == 0
+    data = read(project, CODEX)
+    assert not any("lineup hook" in c for event in data["hooks"] for c in commands(data, event))
+    assert commands(data, "Stop") == ["echo mine"] and commands(data, "PreToolUse") == ["echo also-mine"]
+    assert data["other"] == {"keep": True} and not hooks.installed(project.root)
+
+
+def test_cmd_form_is_recognized_as_lineups_own():
+    from lineup import hookjson
+    for command in ('cmd /c "lineup hook stop --agent codex || echo {}"', 'CMD.EXE /C "lineup hook start --agent codex"',
+                    "lineup hook prompt --agent claude || echo {}"):
+        assert hookjson.is_lineup_command(command), command
+    for command in ("echo lineup hook", 'cmd /c "echo hi"', "lineuphook stop"):
+        assert not hookjson.is_lineup_command(command), command
 
 
 # ---- lineup's own setup isn't HIGH ----

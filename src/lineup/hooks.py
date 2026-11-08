@@ -192,10 +192,16 @@ def run_hook(event_name, agent, stream=None):
 
 # ---- lineup init: install (or remove) the hooks ----
 
-def _command(event, agent):
+def _command(event, agent, windows=None):
     """The hook command. If lineup isn't installed or on PATH, the shell's error is swallowed and "{}"
-    (nothing to say) is printed instead, so the agent carries on normally."""
-    return f"lineup hook {event} --agent {agent} || echo {{}}"
+    (nothing to say) is printed instead, so the agent carries on normally.
+
+    Codex on Windows runs hooks in PowerShell 5.1, which rejects `||`, so there the command runs in cmd.
+    """
+    command = f"lineup hook {event} --agent {agent} || echo {{}}"
+    if agent == "codex" and (os.name == "nt" if windows is None else windows):
+        return f'cmd /c "{command}"'
+    return command
 
 
 def claude_hooks():
@@ -207,11 +213,13 @@ def claude_hooks():
     }
 
 
-def codex_hooks():
+def codex_hooks(windows=None):
+    def handler(event, timeout):
+        return {"type": "command", "command": _command(event, "codex", windows), "timeout": timeout}
     return {
-        "SessionStart": [{"hooks": [{"type": "command", "command": _command("start", "codex"), "timeout": 60}]}],
-        "UserPromptSubmit": [{"hooks": [{"type": "command", "command": _command("prompt", "codex"), "timeout": 30}]}],
-        "Stop": [{"hooks": [{"type": "command", "command": _command("stop", "codex"), "timeout": 60}]}],
+        "SessionStart": [{"hooks": [handler("start", 60)]}],
+        "UserPromptSubmit": [{"hooks": [handler("prompt", 30)]}],
+        "Stop": [{"hooks": [handler("stop", 60)]}],
     }
 
 
@@ -249,27 +257,38 @@ def installed(root):
     return any(has_lineup_hooks(root, rel) for rel in hookjson.SETTINGS_FILES)
 
 
-def _has_command(groups, command):
-    return any(h.get("command") == command for g in groups for h in g.get("hooks", []))
+def _lineup_commands(data):
+    """[(event, command)] for every lineup hook in a settings object, in any form lineup ever wrote."""
+    hooks = data.get("hooks") if isinstance(data, dict) else None
+    if not isinstance(hooks, dict):
+        return []
+    return [(event, h["command"]) for event, groups in hooks.items() if isinstance(groups, list)
+            for g in groups if isinstance(g, dict) and isinstance(g.get("hooks"), list) for h in g["hooks"]
+            if isinstance(h, dict) and hookjson.is_lineup_command(h.get("command"))]
 
 
 def plan_init(root, agents):
-    """What `lineup init` would add: {file: (new_json, [(event, command)])}. Existing settings are kept."""
+    """What `lineup init` would change: {file: (new_json, [(event, added command)], [(event, replaced command)])}.
+
+    lineup's older hook lines (e.g. 0.1.0's Codex lines on Windows) are replaced, never duplicated.
+    Everything else in the file is kept.
+    """
     plan = {}
     for agent in agents:
         rel, wanted = TARGETS[agent]
-        data = _read_settings(root, rel)
+        original = _read_settings(root, rel)
+        if original.get("hooks") is not None and not isinstance(original["hooks"], dict):
+            raise ValueError(f"{rel} has a \"hooks\" entry that isn't a JSON object, so lineup won't change it")
+        old = _lineup_commands(original)
+        groups_wanted = wanted()
+        new = [(event, g["hooks"][0]["command"]) for event, groups in groups_wanted.items() for g in groups]
+        if sorted(old) == sorted(new):
+            continue  # already installed, in the current form
+        data = hookjson.without_lineup(original)
         hooks = data.setdefault("hooks", {})
-        added = []
-        for event, groups in wanted().items():
-            current = hooks.setdefault(event, [])
-            for group in groups:
-                command = group["hooks"][0]["command"]
-                if not _has_command(current, command):
-                    current.append(group)
-                    added.append((event, command))
-        if added:
-            plan[rel] = (data, added)
+        for event, groups in groups_wanted.items():
+            hooks.setdefault(event, []).extend(groups)
+        plan[rel] = (data, [p for p in new if p not in old], [p for p in old if p not in new])
     return plan
 
 
@@ -281,16 +300,13 @@ def plan_remove(root):
         kept = hookjson.without_lineup(data)
         if kept == data:
             continue
-        removed = [(event, h["command"]) for event, groups in data.get("hooks", {}).items() if isinstance(groups, list)
-                   for g in groups if isinstance(g, dict) for h in g.get("hooks", [])
-                   if isinstance(h, dict) and hookjson.is_lineup_command(h.get("command"))]
-        plan[rel] = (kept or None, removed)  # nothing left: the file was only lineup's, so delete it
+        plan[rel] = (kept or None, _lineup_commands(data))  # nothing left: the file was only lineup's, so delete it
     return plan
 
 
 def write_plan(root, plan):
     """Write (or delete) the planned files: temp file, then swap in."""
-    for rel, (data, _) in plan.items():
+    for rel, (data, *_) in plan.items():
         file = Path(root, rel)
         if data is None:
             file.unlink(missing_ok=True)

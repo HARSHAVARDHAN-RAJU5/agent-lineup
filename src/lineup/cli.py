@@ -1,6 +1,7 @@
 """Command-line entry point: `lineup <command>`."""
 
 import argparse
+import os
 import sys
 import textwrap
 
@@ -345,12 +346,16 @@ def _init(args):
         for warning in hooks.tracked_warnings(root):
             print(warning)
         return 0
-    print("lineup init will add these hooks (your other settings stay as they are):\n")
-    for rel, (_, added) in plan.items():
+    print("lineup init will write these hooks (your other settings stay as they are):\n")
+    for rel, (_, added, replaced) in plan.items():
         print(f"  {rel}")
         for event, command in added:
             print(f"    {event:<17} {command}")
-    if any(event == "SessionStart" for _, added in plan.values() for event, _ in added):
+        if replaced:
+            print("    replacing lineup's older hooks:")
+            for event, command in replaced:
+                print(f"      {event:<17} {command}")
+    if any(event == "SessionStart" for _, added, _ in plan.values() for event, _ in added):
         note = textwrap.fill(hooks.SESSION_NOTE, 76, initial_indent="    ", subsequent_indent="    ")
         print(f"\nAt each session start, the agent is also given this note:\n{note}")
     if not _confirm(args, "Write these changes?", ""):
@@ -367,6 +372,9 @@ def _init(args):
     if any(rel.startswith(".codex") for rel in plan):
         print("Codex: open Codex in this repo and run /hooks to review and trust the lineup hooks. "
               "They don't run until you trust them.")
+        if os.name == "nt":
+            print("Codex on Windows: if you trusted lineup's hooks before, run /hooks again. "
+                  "Codex needs you to re-trust hooks that changed.")
     return 0
 
 

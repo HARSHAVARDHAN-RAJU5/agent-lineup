@@ -2,13 +2,19 @@
 
 import copy
 import json
+import re
 
 # Files that can hold lineup's hooks. The first one is the old location (before settings.local.json).
 SETTINGS_FILES = (".claude/settings.json", ".claude/settings.local.json", ".codex/hooks.json")
 
 
+# lineup's hook line, plain (`lineup hook stop --agent claude || echo {}`) or wrapped in cmd for Codex on
+# Windows (`cmd /c "lineup hook stop --agent codex || echo {}"`).
+LINEUP_COMMAND = re.compile(r'(?:(?i:cmd(?:\.exe)?)\s+/[cC]\s+"?)?lineup hook ')
+
+
 def is_lineup_command(command):
-    return isinstance(command, str) and command.strip().startswith("lineup hook ")
+    return isinstance(command, str) and LINEUP_COMMAND.match(command.strip()) is not None
 
 
 def without_lineup(data):
