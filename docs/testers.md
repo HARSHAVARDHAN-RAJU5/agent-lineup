@@ -40,7 +40,7 @@ Use `--agent codex` instead if you use Codex, so you only get files for the agen
 ## Use it for 2 weeks
 
 1. Work with your agent as usual. After each reply, lineup prints a line if anything changed.
-2. When it shows HIGH, open a second terminal in the same folder and run `lineup risky` to see why.
+2. When it shows HIGH, open a second terminal in the same folder and run `lineup risky` to see why. Use a second terminal rather than `!` inside the agent: anything run with `!` goes into the agent's context, so it may comment on it.
 3. To undo a file: `lineup rollback 3` (the ID) or `lineup rollback auth.py` (the name).
 4. Run `lineup diff` for an AI summary of what changed.
 

@@ -73,9 +73,9 @@ Only `lineup diff` uses AI. It sends the changed lines to the agent you already 
 
 ## Run it in a second terminal
 
-You can run lineup with `!` in the same session (for example `! lineup risky`), but the agent may comment on the output. Its commentary isn't part of lineup's check: the scores come from fixed rules, not from the agent.
+You can run lineup with `!` in the same session (for example `! lineup risky`). But anything you run with `!` goes into the agent's context, so the agent may comment on it. Its commentary isn't part of lineup's check: the scores come from fixed rules, not from the agent.
 
-To avoid this, open a second terminal in the same folder and run lineup there.
+To keep the agent out of it, open a second terminal in the same folder and run lineup there.
 
 ## Known limits
 
