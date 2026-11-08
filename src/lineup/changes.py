@@ -297,10 +297,47 @@ def _compare(root, base, row, path, secret_hashes=frozenset()):
     return _build(root, path, kind, old_size or 0, lambda: git.show_file(root, rev, path))
 
 
+# Build and cache files lineup always skips, even in a repo with no .gitignore.
+JUNK_FOLDERS = {"__pycache__", "node_modules", ".venv", "venv", ".pytest_cache", ".mypy_cache"}
+JUNK_ENDINGS = (".pyc", ".pyo")
+JUNK_NAMES = {".DS_Store"}
+
+
+def is_junk(path):
+    parts = path.replace("\\", "/").split("/")
+    return (any(part in JUNK_FOLDERS for part in parts[:-1]) or parts[-1] in JUNK_NAMES
+            or parts[-1].endswith(JUNK_ENDINGS))
+
+
+def skipped(root, paths):
+    """The paths lineup leaves out: cache/build junk, and files git ignores (one batched git call).
+
+    Private files (.env, keys) are never skipped even when git ignores them: lineup still tracks them by
+    fingerprint and flags them.
+    """
+    paths = set(paths)
+    junk = {p for p in paths if is_junk(p)}
+    # Only paths inside the repo go to git (it stops with an error otherwise); the rest are refused later.
+    inside = [p for p in sorted(paths - junk) if not is_private(p) and _inside_repo(p)]
+    return junk | git.ignored_among(root, inside)
+
+
+def _inside_repo(path):
+    normal = posixpath.normpath(path.replace("\\", "/"))
+    return not (normal == ".." or normal.startswith("../") or posixpath.isabs(normal) or re.match(r"[A-Za-z]:", normal))
+
+
+def kept(root, paths):
+    """`paths` without the skipped ones, in their original order."""
+    paths = list(paths)
+    leave_out = skipped(root, paths)
+    return [p for p in paths if p not in leave_out]
+
+
 def committed_changes(root, old, new):
     """Files changed by the commits between `old` and `new`, each compared with its version at `old`."""
     found = []
-    for path in git.files_between(root, old, new):
+    for path in kept(root, git.files_between(root, old, new)):
         old_size, new_size = git.blob_size(root, old, path), git.blob_size(root, new, path)
         kind = _kind(old_size is not None, new_size is not None)
         if not kind:
@@ -322,6 +359,7 @@ def find_changes(root, table=None):
     paths = {path for _, path in git.changed_files(root, base)}
     paths.update(git.untracked_files(root))
     paths.update(rows)
+    paths -= skipped(root, paths)  # caches, build output and git-ignored files
     if table:  # a hidden private file created after the photo
         paths.update(p for p in git.ignored_files(root, private_pathspecs()) if is_private(p))
 

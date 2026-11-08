@@ -216,6 +216,16 @@ def staged_note(root, only=None):
             for p in staged]
 
 
+def _names_skipped(root, token, leave_out):
+    """True if what the user typed names a file lineup skips (a cache file or one git ignores)."""
+    text = token.strip().replace("\\", "/").removeprefix("./")
+    if text.isdigit():
+        return False
+    if any(p == text or p.endswith("/" + text) for p in leave_out):
+        return True
+    return text in changes.skipped(root, [text])
+
+
 def _rollback(args):
     root = _root()
     if root is None:
@@ -225,17 +235,22 @@ def _rollback(args):
         return 1
     last_check = store.load_table(root)  # before refreshing: to spot files changed since the last check
     table, _, _, _ = _collect(root)  # new commits first, so committed files are refused
+    leave_out = changes.skipped(root, table["files"])  # e.g. an older photo's __pycache__ rows
+    visible = {**table, "files": {p: r for p, r in table["files"].items() if p not in leave_out}}
     resolved, problems_found = [], []
     for token in args.ids:  # IDs or file names
-        file_id, problem = rollback.resolve(table, token)
+        file_id, problem = rollback.resolve(visible, token)
+        if problem and _names_skipped(root, token, leave_out):
+            problem = (f"{token} is a cache file or a file git ignores. lineup skips those, "
+                       "so there's nothing to roll back")
         if problem:
             problems_found.append(problem)
         else:
             resolved.append(file_id)
     ids = list(dict.fromkeys(resolved))  # "3 3" (or "3 auth.py") counts once
-    unknown = [i for i in ids if i not in rollback.valid_ids(table)]
+    unknown = [i for i in ids if i not in rollback.valid_ids(visible)]
     if problems_found or unknown:  # a typo or an unclear name: change nothing
-        valid = ", ".join(str(i) for i in rollback.valid_ids(table)) or "none yet (run lineup risky first)"
+        valid = ", ".join(str(i) for i in rollback.valid_ids(visible)) or "none yet (run lineup risky first)"
         lines = [f"{problem[:1].upper()}{problem[1:]}." for problem in problems_found]
         if unknown:
             lines.append(f"No file with ID {', '.join(str(i) for i in unknown)}.")

@@ -44,7 +44,8 @@ def take(root, keep=False):
     base = head or git.EMPTY_TREE
 
     files = {}
-    not_committed = sorted(set([path for _, path in git.changed_files(root, base)] + git.untracked_files(root)))
+    not_committed = changes.kept(root, sorted(set([path for _, path in git.changed_files(root, base)]
+                                                  + git.untracked_files(root))))  # no caches or ignored files
     secret_hashes = changes.private_fingerprints(root, old_rows, not_committed)
     for path in not_committed:
         row = _row(root, path, secret_hashes)
@@ -101,7 +102,7 @@ def check_commits(root, table):
             "reasons": [reason for _, reason in flags],
         })
         store.log(root, f"commit {head[:7]}: {change.path} ({change.file_kind}) flagged {rules.score(flags)}")
-    for path in git.files_between(root, last, head):  # 2. then off the undo list
+    for path in changes.kept(root, git.files_between(root, last, head)):  # 2. then off the undo list
         row = table["files"].get(path, {})
         if row.get("copy"):
             store.delete_copy(root, path)
