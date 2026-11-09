@@ -254,7 +254,7 @@ def _rollback(args):
     unknown = [i for i in ids if i not in rollback.valid_ids(visible)]
     if problems_found or unknown:  # a typo or an unclear name: change nothing
         valid = ", ".join(str(i) for i in rollback.valid_ids(visible)) or "none yet (run lineup risky first)"
-        lines = [f"{problem[:1].upper()}{problem[1:]}." for problem in problems_found]
+        lines = [f"{problem}." for problem in problems_found]  # never re-case: a problem may start with a file name
         if unknown:
             lines.append(f"No file with ID {', '.join(str(i) for i in unknown)}.")
         print(" ".join(lines) + f" Valid IDs: {valid}. Nothing was changed.")

@@ -125,7 +125,7 @@ def test_name_matching_several_files_changes_nothing(repo, monkeypatch, capsys):
     i = ids(repo)
     code, out = run(capsys, "rollback", "auth.py")
     assert code == 1
-    assert (f"Auth.py matches more than one file: {i['lib/auth.py']} lib/auth.py, {i['src/auth.py']} src/auth.py. "
+    assert (f"auth.py matches more than one file: {i['lib/auth.py']} lib/auth.py, {i['src/auth.py']} src/auth.py. "
             "Use the ID.") in out and "Nothing was changed." in out
     assert (repo.root / "lib/auth.py").read_text() == "A = 2\n" and (repo.root / "src/auth.py").read_text() == "B = 2\n"
 

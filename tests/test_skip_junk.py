@@ -147,3 +147,29 @@ def test_many_untracked_files_use_one_batched_git_call(repo, monkeypatch):
     found = changes.find_changes(repo.root, store.load_table(repo.root))
     assert len(found) == 300 and not any("pycache" in c.path for c in found)
     assert len(calls) == 1  # one call for all 300 files, never one per file
+
+
+@pytest.mark.parametrize("token, expected", [
+    ("auth.cpython-310.pyc", "auth.cpython-310.pyc is a cache file or a file git ignores."),
+    ("Auth.py", "No changed file named Auth.py."),
+    ("zebraFile.PY", "No changed file named zebraFile.PY."),
+])
+def test_rollback_messages_keep_the_file_names_exact_case(project, capsys, token, expected):
+    project.write("auth.py", "TIMEOUT = 1440\n")
+    project.write(PYC, "compiled\n")
+    run(capsys, "risky")
+    _, out = run(capsys, "rollback", token)
+    assert expected in out
+
+
+def test_ambiguous_name_keeps_its_case(repo, monkeypatch, capsys):
+    repo.write("lib/auth.py", "A = 1\n")
+    repo.write("src/auth.py", "B = 1\n")
+    repo.commit()
+    monkeypatch.chdir(repo.root)
+    main(["hook", "start"])
+    repo.write("lib/auth.py", "A = 2\n")
+    repo.write("src/auth.py", "B = 2\n")
+    run(capsys, "risky")
+    _, out = run(capsys, "rollback", "auth.py")
+    assert out.startswith("auth.py matches more than one file") and "Auth.py" not in out
