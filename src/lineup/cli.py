@@ -424,7 +424,34 @@ def _init_remove(root, args):
     hooks.write_plan(root, plan)
     usage.record(root, "init_remove", **usage.environment())
     print("\nDone. lineup's hooks are removed, so the agent no longer gets lineup's session-start note either.")
+    _after_remove(root, args)
     return 0
+
+
+def _ask(question, default):
+    """Ask a yes/no question. Enter gives `default`; None if no one can answer (piped, or no input)."""
+    try:
+        answer = input(f"\n{question} {'[Y/n]' if default else '[y/N]'} ").strip().lower()
+    except EOFError:
+        return None
+    return default if not answer else answer in ("y", "yes")
+
+
+def _after_remove(root, args):
+    """Offer the export first, then deleting lineup's data. Never asks with --yes or piped input: both no."""
+    drawer = git.git_dir(root) / "lineup"
+    interactive = not args.yes and sys.stdin.isatty()
+    if interactive and usage.has_data(root):
+        if _ask("Export your lineup notes first?", default=True):
+            path = export.write(root)
+            print(f"Wrote {path}\n{export.READ_FIRST}")
+    if not drawer.exists():
+        return
+    if interactive and _ask("Also delete lineup's saved data (photo, copies, backups)?", default=False):
+        store.delete_all(root)  # after the export, never before
+        print("Deleted .git/lineup/.")
+        return
+    print("lineup's saved data stays in .git/lineup/. To send your notes, run lineup report --export.")
 
 
 def build_parser():
