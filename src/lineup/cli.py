@@ -6,7 +6,8 @@ import sys
 import textwrap
 import time
 
-from lineup import __version__, banner, changes, git, guard, hooks, llm, rollback, rules, snapshot, store, summary, usage
+from lineup import (__version__, banner, changes, export, git, guard, hooks, llm, rollback, rules, snapshot, store,
+                    summary, usage)
 from lineup import table as tables
 
 
@@ -299,56 +300,18 @@ def _rollback(args):
     return 1 if problems else 0
 
 
-def report_rows(s):
-    """The summary rows shared by lineup report and the export: counts, dates and types only."""
-    days = s["days"]
-    period = f" ({days[0]} to {days[-1]})" if days else ""
-    r, f, cmd = s["rollbacks"], s["flags"], s["commands"]
-    per_reply = s["files_per_reply"]
-    seconds = s["ai_seconds"]
-    ai = f"{s['ai_runs']} runs"
-    if seconds:
-        ai += f", avg {sum(seconds) / len(seconds):.1f}s"
-    ai += f", failed {s['ai_failed']}, timed out {s['ai_timeouts']}"
-    if s["ai_tokens"]:
-        ai += f", tokens {sum(s['ai_tokens']):,} (when reported)"
-    return [
-        ("lineup version", s["lineup"] or __version__),
-        ("Days active", f"{len(days)}{period}"),
-        ("Agents", ", ".join(s["agents"]) or "none yet"),
-        ("OS / Python", f"{s['os'] or '?'} / {s['python'] or '?'}"),
-        ("Sessions started", s["sessions"]),
-        ("Agent replies with changes", s["replies"]),
-        ("Files changed per reply", f"avg {sum(per_reply) / len(per_reply):.1f}, max {max(per_reply)}"
-         if per_reply else "-"),
-        ("Files flagged after replies", f"HIGH {f['HIGH']}, MED {f['MED']}, LOW {f['LOW']}"),
-        ("lineup diff runs", cmd.get("diff", 0)),
-        ("lineup risky runs", cmd.get("risky", 0)),
-        ("Rollbacks", f"done {r.get('done', 0)}, refused {r.get('refused', 0)}, "
-                      f"failed {r.get('failed', 0)}, nothing to do {r.get('nothing_to_do', 0)}"),
-        ("AI summaries", ai),
-        ("Hook errors", s["hook_errors"]),
-    ]
-
-
-def report_text(events):
-    """The usage summary for testers to send: counts, dates and types only."""
-    if not events:
-        return "lineup report: no usage recorded in this repo yet."
-    rows = report_rows(usage.summarize(events))
-    width = max(len(name) for name, _ in rows)
-    lines = ["lineup report (this repo only)", ""]
-    lines += [f"{name:<{width}}  {value}" for name, value in rows]
-    lines += ["", "That's everything in the report: counts and dates only, no code, file names or secrets.",
-              "Nothing has been sent. To share it, copy the lines above into your feedback."]
-    return "\n".join(lines)
-
-
 def _report(args):
     root = _root()
     if root is None:
         return 2
-    print(report_text(usage.read(root)))
+    if args.export:
+        usage.record(root, "command", name="report")
+        path = export.write(root)
+        print(f"Wrote {path}")
+        print(f"\n{export.READ_FIRST}")
+        print("It's kept out of git, and lineup itself skips it. Nothing has been sent.")
+        return 0
+    print(export.report_text(usage.read(root)))
     usage.record(root, "command", name="report")
     return 0
 
@@ -484,8 +447,10 @@ def build_parser():
     undo.add_argument("ids", nargs="+", metavar="id_or_file",
                       help="file IDs or names from lineup risky / diff, e.g. 3 or auth.py")
     undo.set_defaults(func=_rollback)
-    sub.add_parser("report", help="usage counts for testers to send (nothing is sent by lineup)").set_defaults(
-        func=_report)
+    report = sub.add_parser("report", help="usage counts for testers to send (nothing is sent by lineup)")
+    report.add_argument("--export", action="store_true",
+                        help=f"write {export.FILE} in the repo root: summary, usage tables and your notes")
+    report.set_defaults(func=_report)
 
     note = sub.add_parser("note", help="save a short tester note for this repo (secrets are hidden)")
     note.add_argument("text", nargs="*", help='what happened, e.g. "rollback put back the wrong version"')

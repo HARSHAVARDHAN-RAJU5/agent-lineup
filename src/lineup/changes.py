@@ -301,6 +301,7 @@ def _compare(root, base, row, path, secret_hashes=frozenset()):
 JUNK_FOLDERS = {"__pycache__", "node_modules", ".venv", "venv", ".pytest_cache", ".mypy_cache"}
 JUNK_ENDINGS = (".pyc", ".pyo")
 JUNK_NAMES = {".DS_Store"}
+OWN_FILES = {"lineup-notes.md", "lineup-notes.md.tmp"}  # lineup report --export, in the repo root
 
 
 def is_junk(path):
@@ -316,7 +317,7 @@ def skipped(root, paths):
     fingerprint and flags them.
     """
     paths = set(paths)
-    junk = {p for p in paths if is_junk(p)}
+    junk = {p for p in paths if is_junk(p) or p in OWN_FILES}
     # Only paths inside the repo go to git (it stops with an error otherwise); the rest are refused later.
     inside = [p for p in sorted(paths - junk) if not is_private(p) and _inside_repo(p)]
     return junk | git.ignored_among(root, inside)
