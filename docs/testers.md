@@ -15,7 +15,7 @@ What leaves your machine:
 - `.env`, key and credential files are never sent. Secret-looking text is hidden, but the scan can miss things.
 
 What stays on your machine:
-- Everything else: the hooks, `lineup risky`, `lineup rollback` and `lineup report`.
+- Everything else: the hooks, `lineup risky`, `lineup rollback`, `lineup note` and `lineup report`.
 - lineup's data lives in `.git/lineup/` inside your repo. Nothing is uploaded, and lineup never sends us anything.
 
 ## Install
@@ -44,21 +44,33 @@ Use `--agent codex` instead if you use Codex, so you only get files for the agen
 3. To undo a file: `lineup rollback 3` (the ID) or `lineup rollback auth.py` (the name).
 4. Run `lineup diff` for an AI summary of what changed.
 
-## What to log
+## Add notes as you go
 
-Copy [notes-template.md](https://github.com/HARSHAVARDHAN-RAJU5/agent-lineup/blob/main/docs/notes-template.md) somewhere private and add a short entry when lineup helps, gets something wrong, or annoys you. Don't paste code, secrets or company details.
+When lineup helps, gets something wrong, or annoys you, add a note in that repo:
+
+```
+lineup note "flag on the config file was wrong"
+lineup note --list
+```
+
+Notes are saved exactly as typed, except anything that looks like a secret, which becomes `[REDACTED]`. Don't type code, file names or company details. For longer thoughts, you can use [notes-template.md](https://github.com/HARSHAVARDHAN-RAJU5/agent-lineup/blob/main/docs/notes-template.md).
+
+## What lineup collects
+
+lineup keeps a usage log in `.git/lineup/` in each repo. It never leaves your machine by itself.
+- **Collected:** sessions, active days, which rules fired and at what risk, file *types* (like python, test, config, env), rollbacks, how long AI summaries took, hook errors, your agent, OS, Python and lineup versions, and your notes.
+- **Not collected:** file names, paths, code, branch names, commit messages or secrets.
 
 ## Sending feedback
 
 - Harsha will message you the check-in questions each week.
-- At the end, run `lineup report` in each repo you used. It prints counts only (runs, flags by risk level, rollbacks, days active), with no code or file names. Read it, then paste it with your notes into the final form.
+- At the end, in each repo you used, run:
+  ```
+  lineup report --export
+  ```
+  It writes `lineup-notes.md` in the repo folder (kept out of git).
+- **Read it before sending.** It should contain no file names, code or secrets. If you see any, delete them. Then send the file.
 
 ## Removing lineup
 
-In each repo you used:
-
-```
-lineup init --remove
-```
-
-Then `pipx uninstall agent-lineup`. To delete lineup's saved data as well, delete the `.git/lineup` folder in each repo.
+In each repo you used, run `lineup init --remove`. It removes the hooks, then asks whether to export your notes first (Enter = yes) and whether to delete lineup's saved data (Enter = keep). Then run `pipx uninstall agent-lineup`.

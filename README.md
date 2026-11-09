@@ -60,7 +60,14 @@ Use `--agent codex` if you use Codex, or leave `--agent` out for both.
 | `lineup diff` | What changed since the session started, with a short AI summary. |
 | `lineup risky` | Scores each changed file HIGH, MED or LOW using fixed rules, and shows the rule. |
 | `lineup rollback 3 4` | Undoes files by ID or name. Your current version is backed up first. |
-| `lineup report` | Usage counts to send as tester feedback. No code or file names. |
+| `lineup note "..."` | Saves a short tester note for this repo. Secrets become `[REDACTED]`. `--list` shows them. |
+| `lineup report` | Usage counts for tester feedback. `--export` writes `lineup-notes.md` to send. |
+
+## Notes and feedback (testers)
+
+- `lineup note "the flag on the config file was wrong"` saves a note in this repo. Anything that looks like a secret becomes `[REDACTED]`.
+- `lineup report --export` writes `lineup-notes.md` in the repo root: a summary, the usage tables and your notes. It holds file *types* (python, test, config), counts and times, never file names, code or secrets. It's kept out of git and lineup skips it. **Read it before sending.**
+- Everything stays in `.git/lineup/` until you send the file yourself. lineup sends nothing.
 
 ## What gets sent to the AI
 
