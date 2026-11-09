@@ -19,7 +19,7 @@ SUMMARIES = "summaries.json"
 BACKUPS = "backups"
 AGENT_NOTE = "agent_note.json"
 START_MESSAGE = "start_message.txt"
-USAGE = "usage.json"
+NOTES = "notes.jsonl"
 
 
 def folder(root):
@@ -201,30 +201,39 @@ def read_log(root):
     return file.read_text(encoding="utf-8").splitlines() if file.is_file() else []
 
 
-def load_usage(root):
-    """Counts for lineup report: {"counts": {name: n}, "days": ["YYYY-MM-DD", ...]}. Numbers and dates only."""
-    file = folder(root) / USAGE
-    try:
-        data = json.loads(file.read_text(encoding="utf-8")) if file.is_file() else {}
-    except (OSError, ValueError):
-        data = {}
-    counts = {k: v for k, v in dict(data.get("counts", {})).items() if isinstance(v, int)}
-    days = [d for d in data.get("days", []) if isinstance(d, str)]
-    return {"counts": counts, "days": days}
+def save_note(root, text):
+    """Append a tester's note (already cleaned of secrets) with the time it was written."""
+    stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    with open(folder(root) / NOTES, "a", encoding="utf-8") as notes:
+        notes.write(json.dumps({"t": stamp, "text": text}, ensure_ascii=False) + "\n")
 
 
-def count_usage(root, **counts):
-    """Add to the usage counts and mark today as active. Never raises: counting must not break a command."""
-    try:
-        data = load_usage(root)
-        for name, n in counts.items():
-            data["counts"][name] = data["counts"].get(name, 0) + int(n)
-        today = datetime.now().strftime("%Y-%m-%d")
-        if today not in data["days"]:
-            data["days"].append(today)
-        _save_json(root, USAGE, data)
-    except Exception:
-        pass
+def load_notes(root):
+    """[(time, text)] oldest first. Bad lines are skipped."""
+    file = folder(root) / NOTES
+    if not file.is_file():
+        return []
+    notes = []
+    for line in file.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            note = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(note, dict) and isinstance(note.get("text"), str):
+            notes.append((str(note.get("t", "")), note["text"]))
+    return notes
+
+
+def delete_all(root):
+    """Delete the whole drawer (photo, copies, backups, logs, notes). Refuses if it's a link or junction."""
+    from lineup.paths import is_link
+    drawer = git.git_dir(root) / "lineup"
+    if not drawer.exists():
+        return False
+    if is_link(drawer):
+        raise OSError(f"{drawer} is a link, so lineup won't delete through it")
+    shutil.rmtree(drawer)
+    return True
 
 
 def clear_copies(root):

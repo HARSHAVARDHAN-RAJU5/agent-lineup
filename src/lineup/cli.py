@@ -4,8 +4,9 @@ import argparse
 import os
 import sys
 import textwrap
+import time
 
-from lineup import __version__, banner, changes, git, guard, hooks, llm, rollback, rules, snapshot, store, summary
+from lineup import __version__, banner, changes, git, guard, hooks, llm, rollback, rules, snapshot, store, summary, usage
 from lineup import table as tables
 
 
@@ -117,7 +118,7 @@ def _diff(args):
     if root is None:
         return 2
     table, found, committed, label = _collect(root)
-    store.count_usage(root, diff_runs=1)
+    usage.record(root, "command", name="diff")
     if committed:
         names = ", ".join(f"{c.path} ({c.file_kind})" for c in committed)
         print(f"Committed since last check: {names}\n")
@@ -176,7 +177,7 @@ def _risky(args):
     if root is None:
         return 2
     table, found, _, label = _collect(root)
-    store.count_usage(root, risky_runs=1)
+    usage.record(root, "command", name="risky")
     committed = committed_rows(table)
     if not found and not committed:
         print(_no_changes("risky", root, table))
@@ -230,6 +231,7 @@ def _rollback(args):
     root = _root()
     if root is None:
         return 2
+    usage.record(root, "command", name="rollback")
     if not store.has_snapshot(root):
         print("No snapshot from the session start, so rollback could wipe your own work. Nothing was changed.")
         return 1
@@ -273,7 +275,9 @@ def _rollback(args):
             problems = True
         outcome = ("refused" if undo.action == "refuse" else "nothing_to_do" if undo.action == "nothing"
                    else "failed" if word.startswith("failed") else "done")
-        store.count_usage(root, **{f"rollback_{outcome}": 1})
+        flagged_at = table["files"].get(undo.path, {}).get("flagged_at")
+        usage.record(root, "rollback", outcome=outcome, type=usage.file_type(undo.path),
+                     seconds_since_flag=int(time.time()) - flagged_at if isinstance(flagged_at, int) else None)
         print(f"{undo.id:<3} {undo.path:<{width}}  {word}")
         if undo.action in rollback.DONE and not word.startswith("failed"):
             for warning in undo.warnings:
@@ -295,24 +299,43 @@ def _rollback(args):
     return 1 if problems else 0
 
 
-def report_text(usage):
-    """The usage summary for testers to send: counts and dates only, from a fixed list of names."""
-    c, days = usage["counts"], sorted(usage["days"])
-    if not c and not days:
-        return "lineup report: no usage recorded in this repo yet."
-    n = lambda name: c.get(name, 0)  # noqa: E731
+def report_rows(s):
+    """The summary rows shared by lineup report and the export: counts, dates and types only."""
+    days = s["days"]
     period = f" ({days[0]} to {days[-1]})" if days else ""
-    rows = [
-        ("lineup version", __version__),
+    r, f, cmd = s["rollbacks"], s["flags"], s["commands"]
+    per_reply = s["files_per_reply"]
+    seconds = s["ai_seconds"]
+    ai = f"{s['ai_runs']} runs"
+    if seconds:
+        ai += f", avg {sum(seconds) / len(seconds):.1f}s"
+    ai += f", failed {s['ai_failed']}, timed out {s['ai_timeouts']}"
+    if s["ai_tokens"]:
+        ai += f", tokens {sum(s['ai_tokens']):,} (when reported)"
+    return [
+        ("lineup version", s["lineup"] or __version__),
         ("Days active", f"{len(days)}{period}"),
-        ("Sessions started", n("sessions")),
-        ("Agent replies with changes", n("replies_with_changes")),
-        ("Files flagged after replies", f"HIGH {n('flagged_HIGH')}, MED {n('flagged_MED')}, LOW {n('flagged_LOW')}"),
-        ("lineup diff runs", n("diff_runs")),
-        ("lineup risky runs", n("risky_runs")),
-        ("Rollbacks", f"done {n('rollback_done')}, refused {n('rollback_refused')}, "
-                      f"failed {n('rollback_failed')}, nothing to do {n('rollback_nothing_to_do')}"),
+        ("Agents", ", ".join(s["agents"]) or "none yet"),
+        ("OS / Python", f"{s['os'] or '?'} / {s['python'] or '?'}"),
+        ("Sessions started", s["sessions"]),
+        ("Agent replies with changes", s["replies"]),
+        ("Files changed per reply", f"avg {sum(per_reply) / len(per_reply):.1f}, max {max(per_reply)}"
+         if per_reply else "-"),
+        ("Files flagged after replies", f"HIGH {f['HIGH']}, MED {f['MED']}, LOW {f['LOW']}"),
+        ("lineup diff runs", cmd.get("diff", 0)),
+        ("lineup risky runs", cmd.get("risky", 0)),
+        ("Rollbacks", f"done {r.get('done', 0)}, refused {r.get('refused', 0)}, "
+                      f"failed {r.get('failed', 0)}, nothing to do {r.get('nothing_to_do', 0)}"),
+        ("AI summaries", ai),
+        ("Hook errors", s["hook_errors"]),
     ]
+
+
+def report_text(events):
+    """The usage summary for testers to send: counts, dates and types only."""
+    if not events:
+        return "lineup report: no usage recorded in this repo yet."
+    rows = report_rows(usage.summarize(events))
     width = max(len(name) for name, _ in rows)
     lines = ["lineup report (this repo only)", ""]
     lines += [f"{name:<{width}}  {value}" for name, value in rows]
@@ -325,7 +348,8 @@ def _report(args):
     root = _root()
     if root is None:
         return 2
-    print(report_text(store.load_usage(root)))
+    print(report_text(usage.read(root)))
+    usage.record(root, "command", name="report")
     return 0
 
 
@@ -376,6 +400,7 @@ def _init(args):
     if not _confirm(args, "Write these changes?", ""):
         return 1
     hooks.write_plan(root, plan)
+    usage.record(root, "init", agents=agents, **usage.environment())
     excluded = [rel for rel in plan if hooks.keep_out_of_git(root, rel)]
     print("\nDone.")
     if excluded:
@@ -406,6 +431,7 @@ def _init_remove(root, args):
     if not _confirm(args, "Remove them?", "--remove "):
         return 1
     hooks.write_plan(root, plan)
+    usage.record(root, "init_remove", **usage.environment())
     print("\nDone. lineup's hooks are removed, so the agent no longer gets lineup's session-start note either.")
     return 0
 

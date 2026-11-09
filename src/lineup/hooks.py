@@ -10,7 +10,7 @@ import os
 import sys
 from pathlib import Path
 
-from lineup import changes, git, hookjson, llm, rules, snapshot, store
+from lineup import changes, git, hookjson, llm, rules, snapshot, store, usage
 
 # ---- reading the hook's input ----
 
@@ -89,7 +89,7 @@ def on_session_start(root, event, agent):
         label = "no commits yet" if table["start_commit"] == git.EMPTY_TREE else table["start_commit"][:7]
         message = f"{PREFIX} photo taken at {label} ({snapshot.summary(table)})"
     context = SESSION_NOTE + (f"\n{note}" if note else "")
-    store.count_usage(root, sessions=1)
+    usage.record(root, "session_start", agent=agent, kept=bool(kept), **usage.environment())
     if agent == "claude":
         # Claude Code doesn't display a session-start message, so it's shown once with the next
         # end-of-reply message instead (and never, if the session makes no edits).
@@ -99,7 +99,7 @@ def on_session_start(root, event, agent):
         emit(message, context, "SessionStart")  # Codex shows a session-start systemMessage
 
 
-def on_stop(root, event):
+def on_stop(root, event, agent=None):
     """End of the agent's reply: one fast rule-based line about what this reply changed, or nothing."""
     if event.get("stop_hook_active") or not store.has_snapshot(root):
         emit()
@@ -123,14 +123,17 @@ def on_stop(root, event):
     high = []  # (id, path, top rule note) for HIGH files changed in this reply
     if this_reply:
         levels = []
+        fired = []  # for the usage log: rule type, risk and file type only, never names
         for c in this_reply:
             flags = sorted(rules.rules_for(c, found, root), key=lambda f: -rules.LEVELS[f[0]])
             level = rules.score(flags)
             levels.append(level)
+            kind = usage.file_type(c.path)
+            fired += [{"rule": usage.rule_type(reason), "risk": risk, "type": kind} for risk, reason in flags]
             if level == "HIGH":
                 high.append((now.get(c.path, {}).get("id", "-"), c.path, flags[0][1]))
-        store.count_usage(root, replies_with_changes=1, **{f"flagged_{level}": levels.count(level)
-                                                            for level in ("HIGH", "MED", "LOW")})
+        usage.record(root, "reply", agent=agent, files_changed=len(this_reply),
+                     flags={level: levels.count(level) for level in ("HIGH", "MED", "LOW")}, rules=fired)
         counts = ", ".join(f"{levels.count(level)} {level}" for level in ("HIGH", "MED", "LOW") if level in levels)
         word = "file" if len(this_reply) == 1 else "files"
         parts.append(f"{len(this_reply)} {word} changed ({counts})")
@@ -174,6 +177,7 @@ def run_hook(event_name, agent, stream=None):
         emit()
         return 0
     event = read_event(stream)
+    root = None
     try:
         root = repo_root(event)
         if root is None:
@@ -182,11 +186,13 @@ def run_hook(event_name, agent, stream=None):
         if event_name == "start":
             on_session_start(root, event, agent)
         elif event_name == "stop":
-            on_stop(root, event)
+            on_stop(root, event, agent)
         else:
             on_prompt(root, event)
     except Exception as error:  # report, but never stop the agent
         emit(f"{PREFIX} hook skipped ({type(error).__name__}: {error})")
+        if root is not None:  # the error type only: its message could hold a file name
+            usage.record(root, "hook_error", hook=event_name, agent=agent, error=type(error).__name__)
     return 0
 
 

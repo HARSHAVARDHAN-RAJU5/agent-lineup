@@ -126,6 +126,8 @@ def record_check(root, table, found):
         if "id" not in row:
             row["id"] = table["next_id"]
             table["next_id"] += 1
+        if row.get("status") != "changed":  # newly flagged: kept for the usage log's time-to-rollback
+            row["flagged_at"] = int(datetime.now().timestamp())
         row["status"] = "changed"
         seen = changes.seen_fingerprint(root, change.path)  # lets rollback spot edits made after this check
         if seen:
@@ -136,6 +138,7 @@ def record_check(root, table, found):
     for path, row in table["files"].items():
         if row.get("status") == "changed" and path not in changed:
             row["status"] = "unchanged"  # e.g. Claude put it back the way it was
+            row.pop("flagged_at", None)
 
     table["last_check"] = datetime.now().strftime("%Y-%m-%d %H:%M")
     store.save_table(root, table)

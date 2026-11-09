@@ -20,8 +20,8 @@ def project(repo, monkeypatch):
     return repo
 
 def plain(row):
-    """A table row without the bookkeeping keys added in Phase 6 (seen fingerprint, file mode)."""
-    return {k: v for k, v in row.items() if k not in ("seen", "mode")}
+    """A table row without the bookkeeping keys added in Phase 6 (seen fingerprint, file mode, flag time)."""
+    return {k: v for k, v in row.items() if k not in ("seen", "mode", "flagged_at")}
 
 
 
