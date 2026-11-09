@@ -353,6 +353,34 @@ def _report(args):
     return 0
 
 
+NOTE_USAGE = 'Usage: lineup note "what happened"   (lineup note --list shows your saved notes)'
+
+
+def _note(args):
+    root = _root()
+    if root is None:
+        return 2
+    usage.record(root, "command", name="note")
+    if args.list:
+        notes = store.load_notes(root)
+        if not notes:
+            print("No notes yet. Add one with: lineup note \"what happened\"")
+        for stamp, text in notes:
+            print(f"{stamp[:16].replace('T', ' ')}  {text}")
+        return 0
+    text = " ".join(args.text).strip()
+    if not text:
+        print(NOTE_USAGE)
+        return 2
+    cleaned, hidden = guard.redact(text)
+    store.save_note(root, cleaned)
+    print("Note saved.")
+    if hidden:
+        word = "possible secret was" if hidden == 1 else "possible secrets were"
+        print(f"{hidden} {word} replaced with {guard.REDACTED} before saving.")
+    return 0
+
+
 def _confirm(args, question, flag):
     """True to go ahead: --yes, or the user says yes. Never asks when there's no one to answer."""
     if args.yes:
@@ -458,6 +486,11 @@ def build_parser():
     undo.set_defaults(func=_rollback)
     sub.add_parser("report", help="usage counts for testers to send (nothing is sent by lineup)").set_defaults(
         func=_report)
+
+    note = sub.add_parser("note", help="save a short tester note for this repo (secrets are hidden)")
+    note.add_argument("text", nargs="*", help='what happened, e.g. "rollback put back the wrong version"')
+    note.add_argument("--list", action="store_true", help="show the saved notes")
+    note.set_defaults(func=_note)
 
     hook = sub.add_parser("hook", help="run by the agent's hooks (start: photo, stop: score line, prompt: notes)")
     hook.add_argument("event", choices=["start", "stop", "prompt"])
