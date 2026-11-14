@@ -7,7 +7,7 @@ import textwrap
 import time
 
 from lineup import (__version__, banner, changes, export, git, guard, hooks, llm, rollback, rules, snapshot, store,
-                    summary, usage)
+                    scope, summary, usage)
 from lineup import table as tables
 
 
@@ -63,14 +63,14 @@ def _no_photo(root):
           "and they can't be rolled back. Tracking from now on.")
 
 
-def scores(root, found):
+def scores(root, found, table=None):
     """{path: "HIGH" | "MED" | "LOW"} from the rules (the same scores `risky` shows)."""
-    return {c.path: rules.score(rules.rules_for(c, found, root)) for c in found}
+    return {c.path: rules.score(scope.all_flags(c, found, root, table)) for c in found}
 
 
 def _ai_summary(root, table, found):
     """The AI part of `diff`: Summary text plus one line per file. Never stops `diff` from printing."""
-    levels = scores(root, found)
+    levels = scores(root, found, table)
     items, skipped = guard.ai_input(found, levels)
     agent = llm.pick_agent(table)
     if agent is None:
@@ -159,7 +159,7 @@ def risky_rows(root, table, found):
     """[(id, path, level, why, other)], HIGH first, then by ID."""
     rows = []
     for change in found:
-        flags = sorted(rules.rules_for(change, found, root), key=lambda f: -rules.LEVELS[f[0]])
+        flags = scope.all_flags(change, found, root, table)
         row_id = table["files"][change.path]["id"] if table else "-"
         rows.append((row_id, change.path, rules.score(flags), _why([r for _, r in flags]), _other(change)))
     rows.sort(key=lambda r: (-rules.LEVELS[r[2]], r[0] if isinstance(r[0], int) else 0, r[1]))
@@ -187,6 +187,11 @@ def _risky(args):
     if found:
         rows = risky_rows(root, table, found)
         print(tables.draw(("ID", "File", "Risk", "Why (rule)", "Other"), [[r] for r in rows], (4, 40, 4, 50, 20)), end="")
+        scope_rows = [(i, p, f"your request didn't mention {label}") for i, p, label in
+                      scope.hits(table, [c.path for c in found])]
+        if scope_rows:  # only when there's something to show
+            print("\nScope (changed, but your request didn't mention it. Wrong? lineup dismiss <ID>)\n")
+            print(tables.draw(("ID", "File", "What"), [[r] for r in scope_rows], (4, 40, 50)), end="")
     elif committed:
         print("No uncommitted changes since the photo.")
     if committed:
@@ -317,6 +322,50 @@ def _report(args):
 
 
 NOTE_USAGE = 'Usage: lineup note "what happened"   (lineup note --list shows your saved notes)'
+
+
+def _dismiss(args):
+    """Tell lineup a scope flag was wrong: the file goes back to its rule score until it changes again."""
+    root = _root()
+    if root is None:
+        return 2
+    usage.record(root, "command", name="dismiss")
+    if not store.has_snapshot(root):
+        print("No snapshot from the session start, so there's nothing to dismiss.")
+        return 1
+    table, found, _, _ = _collect(root)
+    by_path = {c.path: c for c in found}
+    problems, done = [], []
+    for token in args.ids:
+        file_id, problem = rollback.resolve(table, token)
+        if problem:
+            problems.append(f"{problem}.")
+            continue
+        path = next((p for p, r in table["files"].items() if r.get("id") == file_id), None)
+        hit = (table["files"].get(path) or {}).get("scope") if path else None
+        if path is None:
+            problems.append(f"No file with ID {file_id}.")
+        elif not isinstance(hit, dict) or hit.get("dismissed"):
+            problems.append(f"{path} has no scope flag to dismiss.")
+        else:
+            done.append((file_id, path))
+    if problems:
+        print(" ".join(problems) + " Nothing was dismissed.")
+        return 1
+    width = max(len(p) for _, p in done)
+    for file_id, path in done:
+        table["files"][path]["scope"]["dismissed"] = True
+        usage.record(root, "dismiss", kind="scope", type=usage.file_type(path))
+        change = by_path.get(path)
+        if change:
+            flags = sorted(rules.rules_for(change, found, root), key=lambda f: -rules.LEVELS[f[0]])
+            back = f"Risk back to {rules.score(flags)} ({flags[0][1]})." if flags else ""
+        else:
+            back = ""
+        print(f"{file_id:<3} {path:<{width}}  scope dismissed. {back}".rstrip())
+    store.save_table(root, table)
+    print("\nlineup won't flag these again this session, unless the agent changes them again.")
+    return 0
 
 
 def _note(args):
@@ -478,6 +527,10 @@ def build_parser():
     report.add_argument("--export", action="store_true",
                         help=f"write {export.FILE} in the repo root: summary, usage tables and your notes")
     report.set_defaults(func=_report)
+
+    dismiss = sub.add_parser("dismiss", help="say a scope flag was wrong (the file goes back to its rule score)")
+    dismiss.add_argument("ids", nargs="+", metavar="id_or_file", help="file IDs or names from lineup risky")
+    dismiss.set_defaults(func=_dismiss)
 
     note = sub.add_parser("note", help="save a short tester note for this repo (secrets are hidden)")
     note.add_argument("text", nargs="*", help='what happened, e.g. "rollback put back the wrong version"')

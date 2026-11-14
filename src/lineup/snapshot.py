@@ -3,7 +3,7 @@
 from datetime import datetime
 from pathlib import Path
 
-from lineup import changes, git, paths, rules, store
+from lineup import changes, git, paths, rules, scope, store
 from lineup.guard import is_private, private_pathspecs
 
 
@@ -96,7 +96,7 @@ def check_commits(root, table):
 
     flagged = changes.committed_changes(root, last, head)
     for change in flagged:  # 1. flag first: score it and keep the score (names and reasons only, no code)
-        flags = sorted(rules.rules_for(change, flagged, root), key=lambda f: -rules.LEVELS[f[0]])
+        flags = scope.all_flags(change, flagged, root, table)  # a scope hit is kept with the commit too
         table.setdefault("committed", []).append({
             "commit": head, "path": change.path, "risk": rules.score(flags),
             "reasons": [reason for _, reason in flags],

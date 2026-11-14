@@ -41,6 +41,7 @@ def report_rows(s):
         ("Rollbacks", f"done {r.get('done', 0)}, refused {r.get('refused', 0)}, "
                       f"failed {r.get('failed', 0)}, nothing to do {r.get('nothing_to_do', 0)}"),
         ("AI summaries", ai),
+        ("Flags dismissed as wrong", f"scope {s['dismissed']['scope']}, claims {s['dismissed']['claims']}"),
         ("Hook errors", s["hook_errors"]),
     ]
 

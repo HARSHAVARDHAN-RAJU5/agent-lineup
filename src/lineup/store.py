@@ -20,6 +20,7 @@ BACKUPS = "backups"
 AGENT_NOTE = "agent_note.json"
 START_MESSAGE = "start_message.txt"
 NOTES = "notes.jsonl"
+REQUESTS = "requests.json"  # your recent messages, as words only, for the scope check
 
 
 def folder(root):
@@ -199,6 +200,24 @@ def log(root, message):
 def read_log(root):
     file = folder(root) / DIARY
     return file.read_text(encoding="utf-8").splitlines() if file.is_file() else []
+
+
+def load_requests(root):
+    """Your recent messages as word lists, and the mark (the request used last). {} if none or unreadable."""
+    file = folder(root) / REQUESTS
+    try:
+        data = json.loads(file.read_text(encoding="utf-8")) if file.is_file() else {}
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_requests(root, data):
+    _save_json(root, REQUESTS, data)
+
+
+def clear_requests(root):
+    (folder(root) / REQUESTS).unlink(missing_ok=True)
 
 
 def save_note(root, text):

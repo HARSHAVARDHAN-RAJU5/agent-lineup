@@ -68,6 +68,7 @@ RULE_TYPES = {
     "docs changed": "docs",
     "code edited": "code_edited",
     "changed": "changed",
+    "outside your request": "scope",
 }
 
 
@@ -197,6 +198,8 @@ def summarize(events):
         "ai_failed": sum(1 for e in ai if e.get("result") == "failed"),
         "ai_timeouts": sum(1 for e in ai if e.get("result") == "timeout"),
         "hook_errors": count("hook_error"),
+        "dismissed": {k: sum(1 for e in events if e.get("event") == "dismiss" and e.get("kind") == k)
+                      for k in ("scope", "claims")},
         "os": last.get("os"), "python": last.get("python"), "lineup": last.get("lineup"),
     }
 

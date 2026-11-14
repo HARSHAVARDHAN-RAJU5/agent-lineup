@@ -10,7 +10,7 @@ import os
 import sys
 from pathlib import Path
 
-from lineup import changes, git, hookjson, llm, rules, snapshot, store, usage
+from lineup import changes, git, hookjson, llm, rules, scope, snapshot, store, usage
 
 # ---- reading the hook's input ----
 
@@ -80,6 +80,8 @@ def on_session_start(root, event, agent):
     fork is treated like resume: the forked session continues the same work, so the same photo applies.
     """
     note = rollback_note(root)  # read before a fresh photo could replace the table
+    if event.get("source") in ("startup", "clear", None):  # a new conversation: forget the old requests
+        store.clear_requests(root)
     table, kept = snapshot.start_session(root, agent=agent)
     if kept:
         word = "file" if kept == 1 else "files"
@@ -119,19 +121,21 @@ def on_stop(root, event, agent=None):
         emit()  # nothing changed in this reply: stay silent
         return
 
+    new_scope = scope.update(root, table, this_reply) if this_reply else []  # [(path, label)] found now
     parts = []
     high = []  # (id, path, top rule note) for HIGH files changed in this reply
     if this_reply:
         levels = []
         fired = []  # for the usage log: rule type, risk and file type only, never names
         for c in this_reply:
-            flags = sorted(rules.rules_for(c, found, root), key=lambda f: -rules.LEVELS[f[0]])
+            flags = scope.all_flags(c, found, root, table)
             level = rules.score(flags)
             levels.append(level)
             kind = usage.file_type(c.path)
             fired += [{"rule": usage.rule_type(reason), "risk": risk, "type": kind} for risk, reason in flags]
             if level == "HIGH":
-                high.append((now.get(c.path, {}).get("id", "-"), c.path, flags[0][1]))
+                top = next(reason for risk, reason in flags if risk == "HIGH")
+                high.append((now.get(c.path, {}).get("id", "-"), c.path, top))
         usage.record(root, "reply", agent=agent, files_changed=len(this_reply),
                      flags={level: levels.count(level) for level in ("HIGH", "MED", "LOW")}, rules=fired)
         counts = ", ".join(f"{levels.count(level)} {level}" for level in ("HIGH", "MED", "LOW") if level in levels)
@@ -144,14 +148,14 @@ def on_stop(root, event, agent=None):
     total = len(found)
     session = f" {total} changed this session." if total != len(this_reply) else ""
     if high:
-        message = high_list(high, committed and parts[-1])
+        message = high_list(high, committed and parts[-1], [scope.note(p, label) for p, label in new_scope])
     else:
         message = f"{PREFIX} {'; '.join(parts)}.{session} Run lineup risky to see them."
     start = store.pop_start_message(root)  # saved at session start, shown once on top
     emit(f"{start}\n{message}" if start else message)
 
 
-def high_list(high, committed_part=None):
+def high_list(high, committed_part=None, notes=()):
     """The score message when something is HIGH: each HIGH file's ID, name and rule note, then how to undo."""
     shown = high[:MAX_HIGH_SHOWN]
     width = max(len(path) for _, path, _ in shown)
@@ -161,12 +165,19 @@ def high_list(high, committed_part=None):
         lines.append(f"  +{len(high) - MAX_HIGH_SHOWN} more")
     if committed_part:
         lines.append(f"  ({committed_part})")
+    lines += [f"  {note}" for note in notes]  # scope and claims notes: shown once, when first found
     lines.append(f"Undo: lineup rollback {shown[0][0]}")
     return "\n".join(lines)
 
 
 def on_prompt(root, event):
     """Before the user's next message reaches the agent: pass on the rollback note, if any."""
+    prompt = event.get("prompt")
+    if isinstance(prompt, str):
+        try:
+            scope.remember(root, prompt)  # words only, secrets hidden; never logged
+        except Exception:
+            pass  # the scope check is a nice-to-have: never block the user's message
     note = rollback_note(root)
     emit(None, note, "UserPromptSubmit")
 
