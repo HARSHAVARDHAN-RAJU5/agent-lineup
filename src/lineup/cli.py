@@ -6,8 +6,8 @@ import sys
 import textwrap
 import time
 
-from lineup import (__version__, banner, changes, export, git, guard, hooks, llm, rollback, rules, snapshot, store,
-                    scope, summary, usage)
+from lineup import (__version__, banner, changes, claims, export, git, guard, hooks, llm, rollback, rules, snapshot,
+                    store, scope, summary, usage)
 from lineup import table as tables
 
 
@@ -192,6 +192,13 @@ def _risky(args):
         if scope_rows:  # only when there's something to show
             print("\nScope (changed, but your request didn't mention it. Wrong? lineup dismiss <ID>)\n")
             print(tables.draw(("ID", "File", "What"), [[r] for r in scope_rows], (4, 40, 50)), end="")
+        claims_rows = [(i, p, "changed, but the agent didn't mention it") for i, p in
+                       claims.hits(table, [c.path for c in found])]
+        claims_rows += [("-", name, "the agent said it changed this, but it didn't")
+                        for name in claims.unchanged_names(table)]
+        if claims_rows:  # only when there's something to show
+            print("\nClaims (what the agent said vs what changed. Wrong? lineup dismiss <ID>)\n")
+            print(tables.draw(("ID", "File", "What"), [[r] for r in claims_rows], (4, 40, 50)), end="")
     elif committed:
         print("No uncommitted changes since the photo.")
     if committed:
@@ -325,7 +332,7 @@ NOTE_USAGE = 'Usage: lineup note "what happened"   (lineup note --list shows you
 
 
 def _dismiss(args):
-    """Tell lineup a scope flag was wrong: the file goes back to its rule score until it changes again."""
+    """Tell lineup a scope or claims flag was wrong: the file goes back to its rule score until it changes again."""
     root = _root()
     if root is None:
         return 2
@@ -342,27 +349,30 @@ def _dismiss(args):
             problems.append(f"{problem}.")
             continue
         path = next((p for p, r in table["files"].items() if r.get("id") == file_id), None)
-        hit = (table["files"].get(path) or {}).get("scope") if path else None
+        row = (table["files"].get(path) or {}) if path else {}
+        kinds = [k for k in ("scope", "claims")
+                 if isinstance(row.get(k), dict) and not row[k].get("dismissed")]
         if path is None:
             problems.append(f"No file with ID {file_id}.")
-        elif not isinstance(hit, dict) or hit.get("dismissed"):
-            problems.append(f"{path} has no scope flag to dismiss.")
+        elif not kinds:
+            problems.append(f"{path} has no scope or claims flag to dismiss.")
         else:
-            done.append((file_id, path))
+            done.append((file_id, path, kinds))
     if problems:
         print(" ".join(problems) + " Nothing was dismissed.")
         return 1
-    width = max(len(p) for _, p in done)
-    for file_id, path in done:
-        table["files"][path]["scope"]["dismissed"] = True
-        usage.record(root, "dismiss", kind="scope", type=usage.file_type(path))
+    width = max(len(p) for _, p, _ in done)
+    for file_id, path, kinds in done:
+        for kind in kinds:
+            table["files"][path][kind]["dismissed"] = True
+            usage.record(root, "dismiss", kind=kind, type=usage.file_type(path))
         change = by_path.get(path)
         if change:
             flags = sorted(rules.rules_for(change, found, root), key=lambda f: -rules.LEVELS[f[0]])
             back = f"Risk back to {rules.score(flags)} ({flags[0][1]})." if flags else ""
         else:
             back = ""
-        print(f"{file_id:<3} {path:<{width}}  scope dismissed. {back}".rstrip())
+        print(f"{file_id:<3} {path:<{width}}  {' and '.join(kinds)} dismissed. {back}".rstrip())
     store.save_table(root, table)
     print("\nlineup won't flag these again this session, unless the agent changes them again.")
     return 0
@@ -528,7 +538,7 @@ def build_parser():
                         help=f"write {export.FILE} in the repo root: summary, usage tables and your notes")
     report.set_defaults(func=_report)
 
-    dismiss = sub.add_parser("dismiss", help="say a scope flag was wrong (the file goes back to its rule score)")
+    dismiss = sub.add_parser("dismiss", help="say a scope or claims flag was wrong (the file goes back to its rule score)")
     dismiss.add_argument("ids", nargs="+", metavar="id_or_file", help="file IDs or names from lineup risky")
     dismiss.set_defaults(func=_dismiss)
 

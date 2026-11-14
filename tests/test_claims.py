@@ -2,6 +2,7 @@
 
 import io
 import json
+import re
 
 import pytest
 
@@ -177,3 +178,49 @@ def test_claims_are_counted_by_type(project, monkeypatch, capsys):
     reply = [e for e in usage.read(project.root) if e["event"] == "reply"][0]
     assert {"rule": "claims", "risk": "HIGH", "type": "config"} in reply["rules"]
     assert reply["claims_unchanged"] == 1
+
+
+# ---- risky and dismiss ----
+
+def test_risky_shows_a_claims_box(project, monkeypatch, capsys):
+    project.write("config.yaml", "debug: true\n")
+    project.write("src/button.js", "color = 'blue'\n")
+    stop(monkeypatch, capsys, project, "Updated button.js and utils.py.")
+    _, out = run(capsys, "risky")
+    table, box = out.split("Claims (what the agent said")
+    assert re.search(r"config\.yaml +│ HIGH │ config changed", table)
+    assert "+ not mentioned by the agent (claims)" in table
+    assert re.search(r"config\.yaml +│ changed, but the agent didn't mention it", box)
+    assert re.search(r"utils\.py +│ the agent said it changed this, but it didn't", box)
+    assert "Scope" not in out
+
+
+def test_no_claims_box_without_hits(project, monkeypatch, capsys):
+    project.write("config.yaml", "debug: true\n")
+    stop(monkeypatch, capsys, project, "Turned debug on in config.yaml.")
+    _, out = run(capsys, "risky")
+    assert "Claims" not in out and "(claims)" not in out
+
+
+def test_dismiss_puts_the_rule_score_back(project, monkeypatch, capsys):
+    project.write("config.yaml", "debug: true\n")
+    stop(monkeypatch, capsys, project, "Done.")
+    file_id = ids(project)["config.yaml"]
+    code, out = run(capsys, "dismiss", str(file_id))
+    assert code == 0 and f"{file_id}   config.yaml  claims dismissed. Risk back to MED (config changed)." in out
+    _, risky = run(capsys, "risky")
+    assert "Claims" not in risky and re.search(r"config\.yaml +│ MED", risky)
+    dismissed = [e for e in usage.read(project.root) if e["event"] == "dismiss"]
+    assert [(e["kind"], e["type"]) for e in dismissed] == [("claims", "config")]
+
+
+def test_one_dismiss_clears_scope_and_claims(project, monkeypatch, capsys):
+    say(monkeypatch, capsys, project, "make the button blue")
+    project.write("auth/session.py", "TIMEOUT = 1\n")
+    message = stop(monkeypatch, capsys, project, "Made the button blue.")
+    assert "scope: auth/session.py" in message and "claims: auth/session.py" in message
+    code, out = run(capsys, "dismiss", "auth/session.py")
+    assert code == 0 and "scope and claims dismissed. Risk back to HIGH (auth or payment file changed)." in out
+    run(capsys, "report", "--export")
+    text = (project.root / "lineup-notes.md").read_text(encoding="utf-8")
+    assert "| Flags dismissed as wrong | scope 1, claims 1 |" in text and "session.py" not in text

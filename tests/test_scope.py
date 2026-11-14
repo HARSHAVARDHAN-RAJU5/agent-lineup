@@ -215,7 +215,7 @@ def test_dismiss_without_a_flag_changes_nothing(project, monkeypatch, capsys):
     project.write("src/button.js", "color = 'blue'\n")
     stop(monkeypatch, capsys, project)
     code, out = run(capsys, "dismiss", "src/button.js", "config.yaml")
-    assert code == 1 and "src/button.js has no scope flag to dismiss." in out and "Nothing was dismissed." in out
+    assert code == 1 and "src/button.js has no scope or claims flag to dismiss." in out and "Nothing was dismissed." in out
     assert not store.load_table(project.root)["files"]["config.yaml"]["scope"].get("dismissed")
     code, out = run(capsys, "dismiss", "nope.py")
     assert code == 1 and "No changed file named nope.py." in out
