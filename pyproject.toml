@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-lineup"
-version = "0.1.0"
+version = "0.1.1"
 description = "See what your coding agent just changed, which edits are risky, and undo a file."
 readme = "README.md"
 license = "MIT"

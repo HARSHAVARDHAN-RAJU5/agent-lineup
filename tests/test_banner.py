@@ -44,7 +44,7 @@ def in_terminal(monkeypatch, capsys, *argv):
 def test_banner_is_packaged_and_printed_exactly(monkeypatch, capsys):
     assert banner.text() == BANNER_FILE.read_text(encoding="utf-8")
     code, out = in_terminal(monkeypatch, capsys, "--version")
-    assert code == 0 and out == banner.text() + "\n" + "lineup 0.1.0\n"
+    assert code == 0 and out == banner.text() + "\n" + "lineup 0.1.1\n"
 
 
 def test_no_command_shows_banner_then_help_in_a_terminal(monkeypatch, capsys):
@@ -62,7 +62,7 @@ def test_init_shows_banner_in_a_terminal(repo, monkeypatch, capsys):
 
 def test_piped_version_prints_only_the_version():
     code, out = run("--version")
-    assert code == 0 and out == "lineup 0.1.0\n"
+    assert code == 0 and out == "lineup 0.1.1\n"
 
 
 def test_piped_output_has_no_banner_and_no_colour_codes(repo):
