@@ -9,6 +9,9 @@
 - **`lineup note "..."`:** saves a tester note as typed, with secrets replaced by `[REDACTED]`. `lineup note --list` shows them.
 - **`lineup report --export`:** writes `lineup-notes.md` in the repo root (summary, usage tables, notes), kept out of git and skipped by lineup. It starts with a reminder to read it before sending.
 - **`lineup init --remove`:** after removing the hooks, offers to export your notes (Enter = yes), then to delete `.git/lineup/` (Enter = keep). Piped or with `--yes`, it does neither.
+- **Scope:** at the end of a reply, a sensitive file (auth, config, CI or agent settings, env, database, packages, install scripts) that changed although your request never mentioned it goes straight to HIGH, with a note shown once. A go-ahead message ("yes", "ok continue") uses the request before it. Your messages are kept as words only, secrets hidden, forgotten at the next session, never logged.
+- **Claims:** a sensitive file the agent changed but its last message never names goes straight to HIGH, with a note shown once. A file the agent says it changed but didn't gets a note only. The message is checked in memory and never saved. No message (Codex can send none): no check.
+- **`lineup risky`** shows a Scope box and a Claims box, each only when there are hits. **`lineup dismiss <ID|file>`** says a flag was wrong: the file goes back to its rule score until it changes again. Dismissals are counted by file type in the usage log and the export.
 - **Rollback messages** keep file names in their exact case (it printed "Auth.cpython-310.pyc").
 - **Docs:** anything run with `!` inside the agent goes into its context, so the agent may comment on it. Use a second terminal to keep it quiet.
 

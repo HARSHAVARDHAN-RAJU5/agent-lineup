@@ -60,8 +60,16 @@ Use `--agent codex` if you use Codex, or leave `--agent` out for both.
 | `lineup diff` | What changed since the session started, with a short AI summary. |
 | `lineup risky` | Scores each changed file HIGH, MED or LOW using fixed rules, and shows the rule. |
 | `lineup rollback 3 4` | Undoes files by ID or name. Your current version is backed up first. |
+| `lineup dismiss 3` | Says a Scope or Claims flag was wrong. The file goes back to its rule score until it changes again. |
 | `lineup note "..."` | Saves a short tester note for this repo. Secrets become `[REDACTED]`. `--list` shows them. |
 | `lineup report` | Usage counts for tester feedback. `--export` writes `lineup-notes.md` to send. |
+
+## Scope and Claims
+
+Two extra checks run at the end of each reply, using words and file names only (no AI). A hit sends the file straight to HIGH, with a note shown once. `lineup risky` keeps showing it in a Scope or Claims box until you dismiss it.
+
+- **Scope:** a sensitive file (auth, config, CI or agent settings, env, database, packages, install scripts) changed, but your request never mentioned it. If your last message is only a go-ahead ("yes", "ok continue"), lineup uses the request before it.
+- **Claims:** a sensitive file changed, but the agent's last message never names it. Also, as a note only: the agent says it changed a file that didn't change.
 
 ## Notes and feedback (testers)
 
@@ -76,6 +84,7 @@ Only `lineup diff` uses AI. It sends the changed lines to the agent you already 
 - `.env`, key and credential files are never sent. They're listed by name only.
 - Lockfile contents are left out. Secret-looking text is hidden before sending.
 - The hooks, `risky`, `rollback` and `report` use no AI. They run only on your machine.
+- For Scope and Claims, your messages are kept as words only (secrets hidden) in `.git/lineup/` and forgotten at the next session. The agent's last message is checked in memory and never saved. Neither is logged.
 - lineup keeps its photo, file copies and backups in `.git/lineup/` in your repo. Private files are kept as fingerprints only, never copied.
 
 ## Run it in a second terminal

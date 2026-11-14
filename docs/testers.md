@@ -42,6 +42,7 @@ Use `--agent codex` instead if you use Codex, so you only get files for the agen
 1. Work with your agent as usual. After each reply, lineup prints a line if anything changed.
 2. When it shows HIGH, open a second terminal in the same folder and run `lineup risky` to see why. Use a second terminal rather than `!` inside the agent: anything run with `!` goes into the agent's context, so it may comment on it.
 3. To undo a file: `lineup rollback 3` (the ID) or `lineup rollback auth.py` (the name).
+   If a Scope or Claims flag is wrong, run `lineup dismiss 3` instead. That count helps us fix the checks.
 4. Run `lineup diff` for an AI summary of what changed.
 
 ## Add notes as you go
@@ -58,8 +59,8 @@ Notes are saved exactly as typed, except anything that looks like a secret, whic
 ## What lineup collects
 
 lineup keeps a usage log in `.git/lineup/` in each repo. It never leaves your machine by itself.
-- **Collected:** sessions, active days, which rules fired and at what risk, file *types* (like python, test, config, env), rollbacks, how long AI summaries took, hook errors, your agent, OS, Python and lineup versions, and your notes.
-- **Not collected:** file names, paths, code, branch names, commit messages or secrets.
+- **Collected:** sessions, active days, which rules fired and at what risk, Scope and Claims flags you dismissed, file *types* (like python, test, config, env), rollbacks, how long AI summaries took, hook errors, your agent, OS, Python and lineup versions, and your notes.
+- **Not collected:** file names, paths, code, branch names, commit messages, secrets, your messages or the agent's.
 
 ## Sending feedback
 
