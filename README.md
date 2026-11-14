@@ -60,7 +60,22 @@ Use `--agent codex` if you use Codex, or leave `--agent` out for both.
 | `lineup diff` | What changed since the session started, with a short AI summary. |
 | `lineup risky` | Scores each changed file HIGH, MED or LOW using fixed rules, and shows the rule. |
 | `lineup rollback 3 4` | Undoes files by ID or name. Your current version is backed up first. |
-| `lineup report` | Usage counts to send as tester feedback. No code or file names. |
+| `lineup dismiss 3` | Says a Scope or Claims flag was wrong. The file goes back to its rule score until it changes again. |
+| `lineup note "..."` | Saves a short tester note for this repo. Secrets become `[REDACTED]`. `--list` shows them. |
+| `lineup report` | Usage counts for tester feedback. `--export` writes `lineup-notes.md` to send. |
+
+## Scope and Claims
+
+Two extra checks run at the end of each reply, using words and file names only (no AI). A hit sends the file straight to HIGH, with a note shown once. `lineup risky` keeps showing it in a Scope or Claims box until you dismiss it.
+
+- **Scope:** a sensitive file (auth, config, CI or agent settings, env, database, packages, install scripts) changed, but your request never mentioned it. If your last message is only a go-ahead ("yes", "ok continue"), lineup uses the request before it.
+- **Claims:** a sensitive file changed, but the agent's last message never names it. Also, as a note only: the agent says it changed a file that didn't change.
+
+## Notes and feedback (testers)
+
+- `lineup note "the flag on the config file was wrong"` saves a note in this repo. Anything that looks like a secret becomes `[REDACTED]`.
+- `lineup report --export` writes `lineup-notes.md` in the repo root: a summary, the usage tables and your notes. It holds file *types* (python, test, config), counts and times, never file names, code or secrets. It's kept out of git and lineup skips it. **Read it before sending.**
+- Everything stays in `.git/lineup/` until you send the file yourself. lineup sends nothing.
 
 ## What gets sent to the AI
 
@@ -69,13 +84,14 @@ Only `lineup diff` uses AI. It sends the changed lines to the agent you already 
 - `.env`, key and credential files are never sent. They're listed by name only.
 - Lockfile contents are left out. Secret-looking text is hidden before sending.
 - The hooks, `risky`, `rollback` and `report` use no AI. They run only on your machine.
+- For Scope and Claims, your messages are kept as words only (secrets hidden) in `.git/lineup/` and forgotten at the next session. The agent's last message is checked in memory and never saved. Neither is logged.
 - lineup keeps its photo, file copies and backups in `.git/lineup/` in your repo. Private files are kept as fingerprints only, never copied.
 
 ## Run it in a second terminal
 
-You can run lineup with `!` in the same session (for example `! lineup risky`), but the agent may comment on the output. Its commentary isn't part of lineup's check: the scores come from fixed rules, not from the agent.
+You can run lineup with `!` in the same session (for example `! lineup risky`). But anything you run with `!` goes into the agent's context, so the agent may comment on it. Its commentary isn't part of lineup's check: the scores come from fixed rules, not from the agent.
 
-To avoid this, open a second terminal in the same folder and run lineup there.
+To keep the agent out of it, open a second terminal in the same folder and run lineup there.
 
 ## Known limits
 

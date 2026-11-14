@@ -1,10 +1,13 @@
 """Command-line entry point: `lineup <command>`."""
 
 import argparse
+import os
 import sys
 import textwrap
+import time
 
-from lineup import __version__, banner, changes, git, guard, hooks, llm, rollback, rules, snapshot, store, summary
+from lineup import (__version__, banner, changes, claims, export, git, guard, hooks, llm, rollback, rules, snapshot,
+                    store, scope, summary, usage)
 from lineup import table as tables
 
 
@@ -60,14 +63,14 @@ def _no_photo(root):
           "and they can't be rolled back. Tracking from now on.")
 
 
-def scores(root, found):
+def scores(root, found, table=None):
     """{path: "HIGH" | "MED" | "LOW"} from the rules (the same scores `risky` shows)."""
-    return {c.path: rules.score(rules.rules_for(c, found, root)) for c in found}
+    return {c.path: rules.score(scope.all_flags(c, found, root, table)) for c in found}
 
 
 def _ai_summary(root, table, found):
     """The AI part of `diff`: Summary text plus one line per file. Never stops `diff` from printing."""
-    levels = scores(root, found)
+    levels = scores(root, found, table)
     items, skipped = guard.ai_input(found, levels)
     agent = llm.pick_agent(table)
     if agent is None:
@@ -116,7 +119,7 @@ def _diff(args):
     if root is None:
         return 2
     table, found, committed, label = _collect(root)
-    store.count_usage(root, diff_runs=1)
+    usage.record(root, "command", name="diff")
     if committed:
         names = ", ".join(f"{c.path} ({c.file_kind})" for c in committed)
         print(f"Committed since last check: {names}\n")
@@ -156,7 +159,7 @@ def risky_rows(root, table, found):
     """[(id, path, level, why, other)], HIGH first, then by ID."""
     rows = []
     for change in found:
-        flags = sorted(rules.rules_for(change, found, root), key=lambda f: -rules.LEVELS[f[0]])
+        flags = scope.all_flags(change, found, root, table)
         row_id = table["files"][change.path]["id"] if table else "-"
         rows.append((row_id, change.path, rules.score(flags), _why([r for _, r in flags]), _other(change)))
     rows.sort(key=lambda r: (-rules.LEVELS[r[2]], r[0] if isinstance(r[0], int) else 0, r[1]))
@@ -175,7 +178,7 @@ def _risky(args):
     if root is None:
         return 2
     table, found, _, label = _collect(root)
-    store.count_usage(root, risky_runs=1)
+    usage.record(root, "command", name="risky")
     committed = committed_rows(table)
     if not found and not committed:
         print(_no_changes("risky", root, table))
@@ -184,6 +187,18 @@ def _risky(args):
     if found:
         rows = risky_rows(root, table, found)
         print(tables.draw(("ID", "File", "Risk", "Why (rule)", "Other"), [[r] for r in rows], (4, 40, 4, 50, 20)), end="")
+        scope_rows = [(i, p, f"your request didn't mention {label}") for i, p, label in
+                      scope.hits(table, [c.path for c in found])]
+        if scope_rows:  # only when there's something to show
+            print("\nScope (changed, but your request didn't mention it. Wrong? lineup dismiss <ID>)\n")
+            print(tables.draw(("ID", "File", "What"), [[r] for r in scope_rows], (4, 40, 50)), end="")
+        claims_rows = [(i, p, "changed, but the agent didn't mention it") for i, p in
+                       claims.hits(table, [c.path for c in found])]
+        claims_rows += [("-", name, "the agent said it changed this, but it didn't")
+                        for name in claims.unchanged_names(table)]
+        if claims_rows:  # only when there's something to show
+            print("\nClaims (what the agent said vs what changed. Wrong? lineup dismiss <ID>)\n")
+            print(tables.draw(("ID", "File", "What"), [[r] for r in claims_rows], (4, 40, 50)), end="")
     elif committed:
         print("No uncommitted changes since the photo.")
     if committed:
@@ -215,27 +230,43 @@ def staged_note(root, only=None):
             for p in staged]
 
 
+def _names_skipped(root, token, leave_out):
+    """True if what the user typed names a file lineup skips (a cache file or one git ignores)."""
+    text = token.strip().replace("\\", "/").removeprefix("./")
+    if text.isdigit():
+        return False
+    if any(p == text or p.endswith("/" + text) for p in leave_out):
+        return True
+    return text in changes.skipped(root, [text])
+
+
 def _rollback(args):
     root = _root()
     if root is None:
         return 2
+    usage.record(root, "command", name="rollback")
     if not store.has_snapshot(root):
         print("No snapshot from the session start, so rollback could wipe your own work. Nothing was changed.")
         return 1
     last_check = store.load_table(root)  # before refreshing: to spot files changed since the last check
     table, _, _, _ = _collect(root)  # new commits first, so committed files are refused
+    leave_out = changes.skipped(root, table["files"])  # e.g. an older photo's __pycache__ rows
+    visible = {**table, "files": {p: r for p, r in table["files"].items() if p not in leave_out}}
     resolved, problems_found = [], []
     for token in args.ids:  # IDs or file names
-        file_id, problem = rollback.resolve(table, token)
+        file_id, problem = rollback.resolve(visible, token)
+        if problem and _names_skipped(root, token, leave_out):
+            problem = (f"{token} is a cache file or a file git ignores. lineup skips those, "
+                       "so there's nothing to roll back")
         if problem:
             problems_found.append(problem)
         else:
             resolved.append(file_id)
     ids = list(dict.fromkeys(resolved))  # "3 3" (or "3 auth.py") counts once
-    unknown = [i for i in ids if i not in rollback.valid_ids(table)]
+    unknown = [i for i in ids if i not in rollback.valid_ids(visible)]
     if problems_found or unknown:  # a typo or an unclear name: change nothing
-        valid = ", ".join(str(i) for i in rollback.valid_ids(table)) or "none yet (run lineup risky first)"
-        lines = [f"{problem[:1].upper()}{problem[1:]}." for problem in problems_found]
+        valid = ", ".join(str(i) for i in rollback.valid_ids(visible)) or "none yet (run lineup risky first)"
+        lines = [f"{problem}." for problem in problems_found]  # never re-case: a problem may start with a file name
         if unknown:
             lines.append(f"No file with ID {', '.join(str(i) for i in unknown)}.")
         print(" ".join(lines) + f" Valid IDs: {valid}. Nothing was changed.")
@@ -257,7 +288,9 @@ def _rollback(args):
             problems = True
         outcome = ("refused" if undo.action == "refuse" else "nothing_to_do" if undo.action == "nothing"
                    else "failed" if word.startswith("failed") else "done")
-        store.count_usage(root, **{f"rollback_{outcome}": 1})
+        flagged_at = table["files"].get(undo.path, {}).get("flagged_at")
+        usage.record(root, "rollback", outcome=outcome, type=usage.file_type(undo.path),
+                     seconds_since_flag=int(time.time()) - flagged_at if isinstance(flagged_at, int) else None)
         print(f"{undo.id:<3} {undo.path:<{width}}  {word}")
         if undo.action in rollback.DONE and not word.startswith("failed"):
             for warning in undo.warnings:
@@ -279,37 +312,94 @@ def _rollback(args):
     return 1 if problems else 0
 
 
-def report_text(usage):
-    """The usage summary for testers to send: counts and dates only, from a fixed list of names."""
-    c, days = usage["counts"], sorted(usage["days"])
-    if not c and not days:
-        return "lineup report: no usage recorded in this repo yet."
-    n = lambda name: c.get(name, 0)  # noqa: E731
-    period = f" ({days[0]} to {days[-1]})" if days else ""
-    rows = [
-        ("lineup version", __version__),
-        ("Days active", f"{len(days)}{period}"),
-        ("Sessions started", n("sessions")),
-        ("Agent replies with changes", n("replies_with_changes")),
-        ("Files flagged after replies", f"HIGH {n('flagged_HIGH')}, MED {n('flagged_MED')}, LOW {n('flagged_LOW')}"),
-        ("lineup diff runs", n("diff_runs")),
-        ("lineup risky runs", n("risky_runs")),
-        ("Rollbacks", f"done {n('rollback_done')}, refused {n('rollback_refused')}, "
-                      f"failed {n('rollback_failed')}, nothing to do {n('rollback_nothing_to_do')}"),
-    ]
-    width = max(len(name) for name, _ in rows)
-    lines = ["lineup report (this repo only)", ""]
-    lines += [f"{name:<{width}}  {value}" for name, value in rows]
-    lines += ["", "That's everything in the report: counts and dates only, no code, file names or secrets.",
-              "Nothing has been sent. To share it, copy the lines above into your feedback."]
-    return "\n".join(lines)
-
-
 def _report(args):
     root = _root()
     if root is None:
         return 2
-    print(report_text(store.load_usage(root)))
+    if args.export:
+        usage.record(root, "command", name="report")
+        path = export.write(root)
+        print(f"Wrote {path}")
+        print(f"\n{export.READ_FIRST}")
+        print("It's kept out of git, and lineup itself skips it. Nothing has been sent.")
+        return 0
+    print(export.report_text(usage.read(root)))
+    usage.record(root, "command", name="report")
+    return 0
+
+
+NOTE_USAGE = 'Usage: lineup note "what happened"   (lineup note --list shows your saved notes)'
+
+
+def _dismiss(args):
+    """Tell lineup a scope or claims flag was wrong: the file goes back to its rule score until it changes again."""
+    root = _root()
+    if root is None:
+        return 2
+    usage.record(root, "command", name="dismiss")
+    if not store.has_snapshot(root):
+        print("No snapshot from the session start, so there's nothing to dismiss.")
+        return 1
+    table, found, _, _ = _collect(root)
+    by_path = {c.path: c for c in found}
+    problems, done = [], []
+    for token in args.ids:
+        file_id, problem = rollback.resolve(table, token)
+        if problem:
+            problems.append(f"{problem}.")
+            continue
+        path = next((p for p, r in table["files"].items() if r.get("id") == file_id), None)
+        row = (table["files"].get(path) or {}) if path else {}
+        kinds = [k for k in ("scope", "claims")
+                 if isinstance(row.get(k), dict) and not row[k].get("dismissed")]
+        if path is None:
+            problems.append(f"No file with ID {file_id}.")
+        elif not kinds:
+            problems.append(f"{path} has no scope or claims flag to dismiss.")
+        else:
+            done.append((file_id, path, kinds))
+    if problems:
+        print(" ".join(problems) + " Nothing was dismissed.")
+        return 1
+    width = max(len(p) for _, p, _ in done)
+    for file_id, path, kinds in done:
+        for kind in kinds:
+            table["files"][path][kind]["dismissed"] = True
+            usage.record(root, "dismiss", kind=kind, type=usage.file_type(path))
+        change = by_path.get(path)
+        if change:
+            flags = sorted(rules.rules_for(change, found, root), key=lambda f: -rules.LEVELS[f[0]])
+            back = f"Risk back to {rules.score(flags)} ({flags[0][1]})." if flags else ""
+        else:
+            back = ""
+        print(f"{file_id:<3} {path:<{width}}  {' and '.join(kinds)} dismissed. {back}".rstrip())
+    store.save_table(root, table)
+    print("\nlineup won't flag these again this session, unless the agent changes them again.")
+    return 0
+
+
+def _note(args):
+    root = _root()
+    if root is None:
+        return 2
+    usage.record(root, "command", name="note")
+    if args.list:
+        notes = store.load_notes(root)
+        if not notes:
+            print("No notes yet. Add one with: lineup note \"what happened\"")
+        for stamp, text in notes:
+            print(f"{stamp[:16].replace('T', ' ')}  {text}")
+        return 0
+    text = " ".join(args.text).strip()
+    if not text:
+        print(NOTE_USAGE)
+        return 2
+    cleaned, hidden = guard.redact(text)
+    store.save_note(root, cleaned)
+    print("Note saved.")
+    if hidden:
+        word = "possible secret was" if hidden == 1 else "possible secrets were"
+        print(f"{hidden} {word} replaced with {guard.REDACTED} before saving.")
     return 0
 
 
@@ -345,17 +435,22 @@ def _init(args):
         for warning in hooks.tracked_warnings(root):
             print(warning)
         return 0
-    print("lineup init will add these hooks (your other settings stay as they are):\n")
-    for rel, (_, added) in plan.items():
+    print("lineup init will write these hooks (your other settings stay as they are):\n")
+    for rel, (_, added, replaced) in plan.items():
         print(f"  {rel}")
         for event, command in added:
             print(f"    {event:<17} {command}")
-    if any(event == "SessionStart" for _, added in plan.values() for event, _ in added):
+        if replaced:
+            print("    replacing lineup's older hooks:")
+            for event, command in replaced:
+                print(f"      {event:<17} {command}")
+    if any(event == "SessionStart" for _, added, _ in plan.values() for event, _ in added):
         note = textwrap.fill(hooks.SESSION_NOTE, 76, initial_indent="    ", subsequent_indent="    ")
         print(f"\nAt each session start, the agent is also given this note:\n{note}")
     if not _confirm(args, "Write these changes?", ""):
         return 1
     hooks.write_plan(root, plan)
+    usage.record(root, "init", agents=agents, **usage.environment())
     excluded = [rel for rel in plan if hooks.keep_out_of_git(root, rel)]
     print("\nDone.")
     if excluded:
@@ -367,6 +462,9 @@ def _init(args):
     if any(rel.startswith(".codex") for rel in plan):
         print("Codex: open Codex in this repo and run /hooks to review and trust the lineup hooks. "
               "They don't run until you trust them.")
+        if os.name == "nt":
+            print("Codex on Windows: if you trusted lineup's hooks before, run /hooks again. "
+                  "Codex needs you to re-trust hooks that changed.")
     return 0
 
 
@@ -383,8 +481,36 @@ def _init_remove(root, args):
     if not _confirm(args, "Remove them?", "--remove "):
         return 1
     hooks.write_plan(root, plan)
+    usage.record(root, "init_remove", **usage.environment())
     print("\nDone. lineup's hooks are removed, so the agent no longer gets lineup's session-start note either.")
+    _after_remove(root, args)
     return 0
+
+
+def _ask(question, default):
+    """Ask a yes/no question. Enter gives `default`; None if no one can answer (piped, or no input)."""
+    try:
+        answer = input(f"\n{question} {'[Y/n]' if default else '[y/N]'} ").strip().lower()
+    except EOFError:
+        return None
+    return default if not answer else answer in ("y", "yes")
+
+
+def _after_remove(root, args):
+    """Offer the export first, then deleting lineup's data. Never asks with --yes or piped input: both no."""
+    drawer = git.git_dir(root) / "lineup"
+    interactive = not args.yes and sys.stdin.isatty()
+    if interactive and usage.has_data(root):
+        if _ask("Export your lineup notes first?", default=True):
+            path = export.write(root)
+            print(f"Wrote {path}\n{export.READ_FIRST}")
+    if not drawer.exists():
+        return
+    if interactive and _ask("Also delete lineup's saved data (photo, copies, backups)?", default=False):
+        store.delete_all(root)  # after the export, never before
+        print("Deleted .git/lineup/.")
+        return
+    print("lineup's saved data stays in .git/lineup/. To send your notes, run lineup report --export.")
 
 
 def build_parser():
@@ -407,8 +533,19 @@ def build_parser():
     undo.add_argument("ids", nargs="+", metavar="id_or_file",
                       help="file IDs or names from lineup risky / diff, e.g. 3 or auth.py")
     undo.set_defaults(func=_rollback)
-    sub.add_parser("report", help="usage counts for testers to send (nothing is sent by lineup)").set_defaults(
-        func=_report)
+    report = sub.add_parser("report", help="usage counts for testers to send (nothing is sent by lineup)")
+    report.add_argument("--export", action="store_true",
+                        help=f"write {export.FILE} in the repo root: summary, usage tables and your notes")
+    report.set_defaults(func=_report)
+
+    dismiss = sub.add_parser("dismiss", help="say a scope or claims flag was wrong (the file goes back to its rule score)")
+    dismiss.add_argument("ids", nargs="+", metavar="id_or_file", help="file IDs or names from lineup risky")
+    dismiss.set_defaults(func=_dismiss)
+
+    note = sub.add_parser("note", help="save a short tester note for this repo (secrets are hidden)")
+    note.add_argument("text", nargs="*", help='what happened, e.g. "rollback put back the wrong version"')
+    note.add_argument("--list", action="store_true", help="show the saved notes")
+    note.set_defaults(func=_note)
 
     hook = sub.add_parser("hook", help="run by the agent's hooks (start: photo, stop: score line, prompt: notes)")
     hook.add_argument("event", choices=["start", "stop", "prompt"])

@@ -142,6 +142,21 @@ def is_ignored(root, path):
     return _run(["check-ignore", "-q", "--no-index", "--", path], root, check=False).returncode == 0
 
 
+def ignored_among(root, paths):
+    """Which of `paths` .gitignore, .git/info/exclude or the global excludes file ignore, tracked or not.
+
+    One git call for the whole list, so the end-of-reply hook stays fast however many files there are.
+    """
+    paths = list(paths)
+    if not paths:
+        return set()
+    result = subprocess.run(["git", "check-ignore", "--no-index", "--stdin", "-z"], cwd=root,
+                            input=b"".join(p.encode("utf-8") + b"\0" for p in paths), capture_output=True)
+    if result.returncode not in (0, 1):  # 1 = none of them is ignored
+        raise GitError(result.stderr.decode("utf-8", "replace").strip() or "git check-ignore failed")
+    return set(_split_z(result.stdout))
+
+
 def tracked_files(root, only=None):
     """Files git tracks (names only). `only` is a list of git patterns."""
     args = ["ls-files", "-z"]

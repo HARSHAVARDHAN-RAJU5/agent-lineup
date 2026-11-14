@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import time
 
-from lineup import store
+from lineup import store, usage
 
 # One line per agent. A new agent = one new line here.
 AGENTS = {
@@ -113,8 +113,12 @@ def run(message, agent, sent_paths, root=None, command=None, timeout=None):
 
     `command` replaces the real agent command (used by tests). The message and reply are never logged.
     """
-    summary, reason = _run(message, agent, sent_paths, command, timeout)
+    timer = usage.Timer()
+    summary, reason, tokens = _run(message, agent, sent_paths, command, timeout)
     if root is not None:
+        result = "ok" if summary else "timeout" if reason == "timed out" else "failed"
+        usage.record(root, "ai_summary", agent=agent, seconds=timer.seconds(), tokens=tokens, result=result,
+                     files=len(sent_paths))
         if summary:
             store.log(root, f"summary by {agent}: {len(summary['files'])} file(s)")
         else:
@@ -124,11 +128,11 @@ def run(message, agent, sent_paths, root=None, command=None, timeout=None):
 
 def _run(message, agent, sent_paths, command, timeout):
     if agent not in AGENTS:
-        return None, "no agent found"
+        return None, "no agent found", None
     if command is None:
         exe = installed(AGENTS[agent][0])
         if not exe:
-            return None, f"{agent} not found"
+            return None, f"{agent} not found", None
         command = [exe, *AGENTS[agent][1:]]
 
     env = dict(os.environ, **{LOOP_GUARD: "1"})
@@ -138,21 +142,39 @@ def _run(message, agent, sent_paths, command, timeout):
             proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE, cwd=empty, env=env, **_own_group())
         except OSError:
-            return None, f"{agent} could not start"
+            return None, f"{agent} could not start", None
         try:
             stdout, _ = proc.communicate(message.encode("utf-8"), timeout=timeout or TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
             _stop_all(proc)
-            return None, "timed out"
+            return None, "timed out", None
     finally:
         _remove_quietly(empty)
     if proc.returncode != 0:
-        return None, f"{agent} failed (exit {proc.returncode})"
+        return None, f"{agent} failed (exit {proc.returncode})", None
 
+    output = stdout.decode("utf-8", "replace")
+    tokens = _tokens(output)
     try:
-        text = _reply_text(agent, stdout.decode("utf-8", "replace"))
+        text = _reply_text(agent, output)
         if not text:
-            return None, f"{agent} failed"
-        return clean(_parse_summary(text), set(sent_paths)), None
+            return None, f"{agent} failed", tokens
+        return clean(_parse_summary(text), set(sent_paths)), None, tokens
     except ValueError:
-        return None, "reply wasn't readable"
+        return None, "reply wasn't readable", tokens
+
+
+def _tokens(output):
+    """Total tokens if the agent reports them (Claude: "usage" in its JSON; Codex: on its turn events), else None."""
+    total = None
+    for line in [output] + output.splitlines():
+        try:
+            data = json.loads(line)
+        except ValueError:
+            continue
+        found = data.get("usage") if isinstance(data, dict) else None
+        if isinstance(found, dict):
+            numbers = [found.get(k) for k in ("input_tokens", "output_tokens") if isinstance(found.get(k), int)]
+            if numbers:
+                total = sum(numbers)
+    return total

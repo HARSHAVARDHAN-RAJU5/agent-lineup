@@ -62,7 +62,7 @@ def resolve(table, token):
     if matches:
         listed = ", ".join(f"{i} {p}" for i, p in matches)
         return None, f"{token} matches more than one file: {listed}. Use the ID."
-    return None, f"no changed file named {token}"
+    return None, f"No changed file named {token}"
 
 
 def _row_for(table, file_id):

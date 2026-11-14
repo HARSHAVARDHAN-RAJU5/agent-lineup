@@ -3,7 +3,7 @@
 from datetime import datetime
 from pathlib import Path
 
-from lineup import changes, git, paths, rules, store
+from lineup import changes, git, paths, rules, scope, store
 from lineup.guard import is_private, private_pathspecs
 
 
@@ -44,7 +44,8 @@ def take(root, keep=False):
     base = head or git.EMPTY_TREE
 
     files = {}
-    not_committed = sorted(set([path for _, path in git.changed_files(root, base)] + git.untracked_files(root)))
+    not_committed = changes.kept(root, sorted(set([path for _, path in git.changed_files(root, base)]
+                                                  + git.untracked_files(root))))  # no caches or ignored files
     secret_hashes = changes.private_fingerprints(root, old_rows, not_committed)
     for path in not_committed:
         row = _row(root, path, secret_hashes)
@@ -95,13 +96,13 @@ def check_commits(root, table):
 
     flagged = changes.committed_changes(root, last, head)
     for change in flagged:  # 1. flag first: score it and keep the score (names and reasons only, no code)
-        flags = sorted(rules.rules_for(change, flagged, root), key=lambda f: -rules.LEVELS[f[0]])
+        flags = scope.all_flags(change, flagged, root, table)  # a scope hit is kept with the commit too
         table.setdefault("committed", []).append({
             "commit": head, "path": change.path, "risk": rules.score(flags),
             "reasons": [reason for _, reason in flags],
         })
         store.log(root, f"commit {head[:7]}: {change.path} ({change.file_kind}) flagged {rules.score(flags)}")
-    for path in git.files_between(root, last, head):  # 2. then off the undo list
+    for path in changes.kept(root, git.files_between(root, last, head)):  # 2. then off the undo list
         row = table["files"].get(path, {})
         if row.get("copy"):
             store.delete_copy(root, path)
@@ -125,6 +126,8 @@ def record_check(root, table, found):
         if "id" not in row:
             row["id"] = table["next_id"]
             table["next_id"] += 1
+        if row.get("status") != "changed":  # newly flagged: kept for the usage log's time-to-rollback
+            row["flagged_at"] = int(datetime.now().timestamp())
         row["status"] = "changed"
         seen = changes.seen_fingerprint(root, change.path)  # lets rollback spot edits made after this check
         if seen:
@@ -135,6 +138,7 @@ def record_check(root, table, found):
     for path, row in table["files"].items():
         if row.get("status") == "changed" and path not in changed:
             row["status"] = "unchanged"  # e.g. Claude put it back the way it was
+            row.pop("flagged_at", None)
 
     table["last_check"] = datetime.now().strftime("%Y-%m-%d %H:%M")
     store.save_table(root, table)

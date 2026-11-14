@@ -10,7 +10,7 @@ import os
 import sys
 from pathlib import Path
 
-from lineup import changes, git, hookjson, llm, rules, snapshot, store
+from lineup import changes, claims, git, hookjson, llm, rules, scope, snapshot, store, usage
 
 # ---- reading the hook's input ----
 
@@ -80,6 +80,8 @@ def on_session_start(root, event, agent):
     fork is treated like resume: the forked session continues the same work, so the same photo applies.
     """
     note = rollback_note(root)  # read before a fresh photo could replace the table
+    if event.get("source") in ("startup", "clear", None):  # a new conversation: forget the old requests
+        store.clear_requests(root)
     table, kept = snapshot.start_session(root, agent=agent)
     if kept:
         word = "file" if kept == 1 else "files"
@@ -89,7 +91,7 @@ def on_session_start(root, event, agent):
         label = "no commits yet" if table["start_commit"] == git.EMPTY_TREE else table["start_commit"][:7]
         message = f"{PREFIX} photo taken at {label} ({snapshot.summary(table)})"
     context = SESSION_NOTE + (f"\n{note}" if note else "")
-    store.count_usage(root, sessions=1)
+    usage.record(root, "session_start", agent=agent, kept=bool(kept), **usage.environment())
     if agent == "claude":
         # Claude Code doesn't display a session-start message, so it's shown once with the next
         # end-of-reply message instead (and never, if the session makes no edits).
@@ -99,7 +101,7 @@ def on_session_start(root, event, agent):
         emit(message, context, "SessionStart")  # Codex shows a session-start systemMessage
 
 
-def on_stop(root, event):
+def on_stop(root, event, agent=None):
     """End of the agent's reply: one fast rule-based line about what this reply changed, or nothing."""
     if event.get("stop_hook_active") or not store.has_snapshot(root):
         emit()
@@ -119,18 +121,33 @@ def on_stop(root, event):
         emit()  # nothing changed in this reply: stay silent
         return
 
+    new_scope = scope.update(root, table, this_reply) if this_reply else []  # [(path, label)] found now
+    new_claims, unchanged = [], []
+    if this_reply:
+        try:  # the agent's message stays in memory only: never saved or logged
+            new_claims, unchanged = claims.update(root, table, this_reply, event.get("last_assistant_message"),
+                                                  [c.path for c in found])
+        except Exception:
+            pass  # a nice-to-have: never break the score line
+    notes = ([scope.note(p, label) for p, label in new_scope] + [claims.note_unmentioned(p) for p, _ in new_claims]
+             + [claims.note_unchanged(n) for n in unchanged])
     parts = []
     high = []  # (id, path, top rule note) for HIGH files changed in this reply
     if this_reply:
         levels = []
+        fired = []  # for the usage log: rule type, risk and file type only, never names
         for c in this_reply:
-            flags = sorted(rules.rules_for(c, found, root), key=lambda f: -rules.LEVELS[f[0]])
+            flags = scope.all_flags(c, found, root, table)
             level = rules.score(flags)
             levels.append(level)
+            kind = usage.file_type(c.path)
+            fired += [{"rule": usage.rule_type(reason), "risk": risk, "type": kind} for risk, reason in flags]
             if level == "HIGH":
-                high.append((now.get(c.path, {}).get("id", "-"), c.path, flags[0][1]))
-        store.count_usage(root, replies_with_changes=1, **{f"flagged_{level}": levels.count(level)
-                                                            for level in ("HIGH", "MED", "LOW")})
+                top = next(reason for risk, reason in flags if risk == "HIGH")
+                high.append((now.get(c.path, {}).get("id", "-"), c.path, top))
+        usage.record(root, "reply", agent=agent, files_changed=len(this_reply),
+                     flags={level: levels.count(level) for level in ("HIGH", "MED", "LOW")}, rules=fired,
+                     claims_unchanged=len(unchanged))
         counts = ", ".join(f"{levels.count(level)} {level}" for level in ("HIGH", "MED", "LOW") if level in levels)
         word = "file" if len(this_reply) == 1 else "files"
         parts.append(f"{len(this_reply)} {word} changed ({counts})")
@@ -141,14 +158,15 @@ def on_stop(root, event):
     total = len(found)
     session = f" {total} changed this session." if total != len(this_reply) else ""
     if high:
-        message = high_list(high, committed and parts[-1])
+        message = high_list(high, committed and parts[-1], notes)
     else:
         message = f"{PREFIX} {'; '.join(parts)}.{session} Run lineup risky to see them."
+        message += "".join(f"\n  {note}" for note in notes)  # shown once, when first found
     start = store.pop_start_message(root)  # saved at session start, shown once on top
     emit(f"{start}\n{message}" if start else message)
 
 
-def high_list(high, committed_part=None):
+def high_list(high, committed_part=None, notes=()):
     """The score message when something is HIGH: each HIGH file's ID, name and rule note, then how to undo."""
     shown = high[:MAX_HIGH_SHOWN]
     width = max(len(path) for _, path, _ in shown)
@@ -158,12 +176,19 @@ def high_list(high, committed_part=None):
         lines.append(f"  +{len(high) - MAX_HIGH_SHOWN} more")
     if committed_part:
         lines.append(f"  ({committed_part})")
+    lines += [f"  {note}" for note in notes]  # scope and claims notes: shown once, when first found
     lines.append(f"Undo: lineup rollback {shown[0][0]}")
     return "\n".join(lines)
 
 
 def on_prompt(root, event):
     """Before the user's next message reaches the agent: pass on the rollback note, if any."""
+    prompt = event.get("prompt")
+    if isinstance(prompt, str):
+        try:
+            scope.remember(root, prompt)  # words only, secrets hidden; never logged
+        except Exception:
+            pass  # the scope check is a nice-to-have: never block the user's message
     note = rollback_note(root)
     emit(None, note, "UserPromptSubmit")
 
@@ -174,6 +199,7 @@ def run_hook(event_name, agent, stream=None):
         emit()
         return 0
     event = read_event(stream)
+    root = None
     try:
         root = repo_root(event)
         if root is None:
@@ -182,20 +208,28 @@ def run_hook(event_name, agent, stream=None):
         if event_name == "start":
             on_session_start(root, event, agent)
         elif event_name == "stop":
-            on_stop(root, event)
+            on_stop(root, event, agent)
         else:
             on_prompt(root, event)
     except Exception as error:  # report, but never stop the agent
         emit(f"{PREFIX} hook skipped ({type(error).__name__}: {error})")
+        if root is not None:  # the error type only: its message could hold a file name
+            usage.record(root, "hook_error", hook=event_name, agent=agent, error=type(error).__name__)
     return 0
 
 
 # ---- lineup init: install (or remove) the hooks ----
 
-def _command(event, agent):
+def _command(event, agent, windows=None):
     """The hook command. If lineup isn't installed or on PATH, the shell's error is swallowed and "{}"
-    (nothing to say) is printed instead, so the agent carries on normally."""
-    return f"lineup hook {event} --agent {agent} || echo {{}}"
+    (nothing to say) is printed instead, so the agent carries on normally.
+
+    Codex on Windows runs hooks in PowerShell 5.1, which rejects `||`, so there the command runs in cmd.
+    """
+    command = f"lineup hook {event} --agent {agent} || echo {{}}"
+    if agent == "codex" and (os.name == "nt" if windows is None else windows):
+        return f'cmd /c "{command}"'
+    return command
 
 
 def claude_hooks():
@@ -207,11 +241,13 @@ def claude_hooks():
     }
 
 
-def codex_hooks():
+def codex_hooks(windows=None):
+    def handler(event, timeout):
+        return {"type": "command", "command": _command(event, "codex", windows), "timeout": timeout}
     return {
-        "SessionStart": [{"hooks": [{"type": "command", "command": _command("start", "codex"), "timeout": 60}]}],
-        "UserPromptSubmit": [{"hooks": [{"type": "command", "command": _command("prompt", "codex"), "timeout": 30}]}],
-        "Stop": [{"hooks": [{"type": "command", "command": _command("stop", "codex"), "timeout": 60}]}],
+        "SessionStart": [{"hooks": [handler("start", 60)]}],
+        "UserPromptSubmit": [{"hooks": [handler("prompt", 30)]}],
+        "Stop": [{"hooks": [handler("stop", 60)]}],
     }
 
 
@@ -249,27 +285,38 @@ def installed(root):
     return any(has_lineup_hooks(root, rel) for rel in hookjson.SETTINGS_FILES)
 
 
-def _has_command(groups, command):
-    return any(h.get("command") == command for g in groups for h in g.get("hooks", []))
+def _lineup_commands(data):
+    """[(event, command)] for every lineup hook in a settings object, in any form lineup ever wrote."""
+    hooks = data.get("hooks") if isinstance(data, dict) else None
+    if not isinstance(hooks, dict):
+        return []
+    return [(event, h["command"]) for event, groups in hooks.items() if isinstance(groups, list)
+            for g in groups if isinstance(g, dict) and isinstance(g.get("hooks"), list) for h in g["hooks"]
+            if isinstance(h, dict) and hookjson.is_lineup_command(h.get("command"))]
 
 
 def plan_init(root, agents):
-    """What `lineup init` would add: {file: (new_json, [(event, command)])}. Existing settings are kept."""
+    """What `lineup init` would change: {file: (new_json, [(event, added command)], [(event, replaced command)])}.
+
+    lineup's older hook lines (e.g. 0.1.0's Codex lines on Windows) are replaced, never duplicated.
+    Everything else in the file is kept.
+    """
     plan = {}
     for agent in agents:
         rel, wanted = TARGETS[agent]
-        data = _read_settings(root, rel)
+        original = _read_settings(root, rel)
+        if original.get("hooks") is not None and not isinstance(original["hooks"], dict):
+            raise ValueError(f"{rel} has a \"hooks\" entry that isn't a JSON object, so lineup won't change it")
+        old = _lineup_commands(original)
+        groups_wanted = wanted()
+        new = [(event, g["hooks"][0]["command"]) for event, groups in groups_wanted.items() for g in groups]
+        if sorted(old) == sorted(new):
+            continue  # already installed, in the current form
+        data = hookjson.without_lineup(original)
         hooks = data.setdefault("hooks", {})
-        added = []
-        for event, groups in wanted().items():
-            current = hooks.setdefault(event, [])
-            for group in groups:
-                command = group["hooks"][0]["command"]
-                if not _has_command(current, command):
-                    current.append(group)
-                    added.append((event, command))
-        if added:
-            plan[rel] = (data, added)
+        for event, groups in groups_wanted.items():
+            hooks.setdefault(event, []).extend(groups)
+        plan[rel] = (data, [p for p in new if p not in old], [p for p in old if p not in new])
     return plan
 
 
@@ -281,16 +328,13 @@ def plan_remove(root):
         kept = hookjson.without_lineup(data)
         if kept == data:
             continue
-        removed = [(event, h["command"]) for event, groups in data.get("hooks", {}).items() if isinstance(groups, list)
-                   for g in groups if isinstance(g, dict) for h in g.get("hooks", [])
-                   if isinstance(h, dict) and hookjson.is_lineup_command(h.get("command"))]
-        plan[rel] = (kept or None, removed)  # nothing left: the file was only lineup's, so delete it
+        plan[rel] = (kept or None, _lineup_commands(data))  # nothing left: the file was only lineup's, so delete it
     return plan
 
 
 def write_plan(root, plan):
     """Write (or delete) the planned files: temp file, then swap in."""
-    for rel, (data, _) in plan.items():
+    for rel, (data, *_) in plan.items():
         file = Path(root, rel)
         if data is None:
             file.unlink(missing_ok=True)
