@@ -93,7 +93,7 @@ def test_stop_shows_one_score_line_for_this_reply(project, monkeypatch, capsys):
     hook(project, monkeypatch, capsys, "start")
     project.write("auth.py", "TIMEOUT = 1440\n")
     project.write("notes.py", "x = 2\n")
-    out = hook(project, monkeypatch, capsys, "stop", last_assistant_message="done")
+    out = hook(project, monkeypatch, capsys, "stop", last_assistant_message="Updated auth.py and notes.py.")
     ids = {p: r["id"] for p, r in store.load_table(project.root)["files"].items() if "id" in r}
     first, *rest = out["systemMessage"].splitlines()
     assert first.startswith("≈ lineup: photo taken at")  # the saved session-start message, on top once

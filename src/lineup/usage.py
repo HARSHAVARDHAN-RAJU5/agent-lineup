@@ -69,6 +69,7 @@ RULE_TYPES = {
     "code edited": "code_edited",
     "changed": "changed",
     "outside your request": "scope",
+    "not mentioned by the agent": "claims",
 }
 
 

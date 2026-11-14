@@ -127,9 +127,10 @@ def flags(table, path):
 
 
 def all_flags(change, found, root, table):
-    """The rule flags (highest first), then the scope flag if there is one."""
+    """The rule flags (highest first), then the scope and claims flags if there are any."""
+    from lineup import claims  # here, to keep imports one-way (claims imports scope)
     ruled = sorted(rules.rules_for(change, found, root), key=lambda f: -rules.LEVELS[f[0]])
-    return ruled + flags(table, change.path)
+    return ruled + flags(table, change.path) + claims.flags(table, change.path)
 
 
 def update(root, table, this_reply):

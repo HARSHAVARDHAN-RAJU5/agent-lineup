@@ -10,7 +10,7 @@ import os
 import sys
 from pathlib import Path
 
-from lineup import changes, git, hookjson, llm, rules, scope, snapshot, store, usage
+from lineup import changes, claims, git, hookjson, llm, rules, scope, snapshot, store, usage
 
 # ---- reading the hook's input ----
 
@@ -122,6 +122,15 @@ def on_stop(root, event, agent=None):
         return
 
     new_scope = scope.update(root, table, this_reply) if this_reply else []  # [(path, label)] found now
+    new_claims, unchanged = [], []
+    if this_reply:
+        try:  # the agent's message stays in memory only: never saved or logged
+            new_claims, unchanged = claims.update(root, table, this_reply, event.get("last_assistant_message"),
+                                                  [c.path for c in found])
+        except Exception:
+            pass  # a nice-to-have: never break the score line
+    notes = ([scope.note(p, label) for p, label in new_scope] + [claims.note_unmentioned(p) for p, _ in new_claims]
+             + [claims.note_unchanged(n) for n in unchanged])
     parts = []
     high = []  # (id, path, top rule note) for HIGH files changed in this reply
     if this_reply:
@@ -137,7 +146,8 @@ def on_stop(root, event, agent=None):
                 top = next(reason for risk, reason in flags if risk == "HIGH")
                 high.append((now.get(c.path, {}).get("id", "-"), c.path, top))
         usage.record(root, "reply", agent=agent, files_changed=len(this_reply),
-                     flags={level: levels.count(level) for level in ("HIGH", "MED", "LOW")}, rules=fired)
+                     flags={level: levels.count(level) for level in ("HIGH", "MED", "LOW")}, rules=fired,
+                     claims_unchanged=len(unchanged))
         counts = ", ".join(f"{levels.count(level)} {level}" for level in ("HIGH", "MED", "LOW") if level in levels)
         word = "file" if len(this_reply) == 1 else "files"
         parts.append(f"{len(this_reply)} {word} changed ({counts})")
@@ -148,9 +158,10 @@ def on_stop(root, event, agent=None):
     total = len(found)
     session = f" {total} changed this session." if total != len(this_reply) else ""
     if high:
-        message = high_list(high, committed and parts[-1], [scope.note(p, label) for p, label in new_scope])
+        message = high_list(high, committed and parts[-1], notes)
     else:
         message = f"{PREFIX} {'; '.join(parts)}.{session} Run lineup risky to see them."
+        message += "".join(f"\n  {note}" for note in notes)  # shown once, when first found
     start = store.pop_start_message(root)  # saved at session start, shown once on top
     emit(f"{start}\n{message}" if start else message)
 
