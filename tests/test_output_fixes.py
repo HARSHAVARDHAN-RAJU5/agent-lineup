@@ -169,7 +169,7 @@ def test_note_text_is_exact():
 
 # ---- 6. README ----
 
-def test_readme_explains_where_to_run_lineup():
-    readme = (Path(__file__).parent.parent / "README.md").read_text(encoding="utf-8")
+def test_guide_explains_where_to_run_lineup():
+    readme = (Path(__file__).parent.parent / "docs" / "guide.md").read_text(encoding="utf-8")
     assert "with `!` in the same session" in readme and "second terminal" in readme
     assert "Its commentary isn't part of lineup's check" in readme

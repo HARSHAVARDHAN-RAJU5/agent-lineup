@@ -1,12 +1,25 @@
 <p align="center"><img src="assets/lineup-logo.svg" alt="lineup logo" width="324"></p>
 
-# lineup
+<h3 align="center">See what your coding agent just changed. Catch the risky edits. Undo a file.</h3>
 
-`lineup` shows what your coding agent (Claude Code or Codex) just changed, flags the risky edits, and lets you undo a file.
+<p align="center">
+  <a href="https://pypi.org/project/agent-lineup/"><img src="https://img.shields.io/pypi/v/agent-lineup" alt="PyPI"></a>
+  <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/agents-Claude%20Code%20%7C%20Codex-blue" alt="Claude Code and Codex">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license"></a>
+</p>
+
+---
+
+Coding agents edit many files in one go. Some of those edits matter: a deleted test, a changed `.env`, an auth file you never asked about. **lineup** watches every reply, flags the risky ones, and lets you put a file back in one command.
+
+- **No API key.** Scores come from fixed rules. The only AI summary uses the agent you already have.
+- **Nothing leaves your machine.** Everything stays in `.git/lineup/` in your repo.
+- **Works where you already are:** Claude Code and Codex, through their hooks.
 
 ## Demo
 
-After the agent's reply, the hook prints a short line:
+After each agent reply that changes files, lineup prints a short line:
 
 ```
 ⚠ ≈ lineup: 2 HIGH
@@ -15,7 +28,7 @@ After the agent's reply, the hook prints a short line:
 Undo: lineup rollback 2
 ```
 
-`lineup risky` shows every changed file and the rule behind its score:
+`lineup risky` shows every changed file and why it got its score:
 
 ```
 | ID | File          | Risk | Why (rule)                                  | Other           |
@@ -25,7 +38,7 @@ Undo: lineup rollback 2
 | 4  | utils.py      | LOW  | code edited, + function added: mul          |                 |
 ```
 
-`lineup rollback 2` (or `lineup rollback auth.py`) puts the file back:
+`lineup rollback 2` puts the file back, and saves your current version first:
 
 ```
 2   auth.py  restored
@@ -35,71 +48,87 @@ Also changed: .env (ID 1), test_utils.py (ID 3), utils.py (ID 4). Check whether 
 
 ## Install
 
-Needs Python 3.10 or newer, git, and [pipx](https://pipx.pypa.io).
+Needs Python 3.10+, git and [pipx](https://pipx.pypa.io).
 
 ```
 pipx install agent-lineup
 cd your-repo
-lineup init --agent claude
+lineup init
 ```
 
-Use `--agent codex` if you use Codex, or leave `--agent` out for both.
+`lineup init` shows the hooks it will add and asks first. Then start a new agent session.
+Codex users: run `/hooks` in Codex and trust the lineup hooks.
 
-`lineup init` shows the hooks it will add and asks before writing. Then start a new Claude Code session. In Codex, run `/hooks` and trust the lineup hooks.
+<details>
+<summary>No pipx, upgrading, uninstalling</summary>
 
-- No pipx: `python -m pip install --user pipx`, then `python -m pipx ensurepath`, then open a new terminal.
-- No git: lineup says "git isn't installed or isn't on your PATH". Install git first.
-- Upgrade: `pipx upgrade agent-lineup`.
-- Uninstall: run `lineup init --remove` in each repo first, then `pipx uninstall agent-lineup`. To delete lineup's saved data too, delete the `.git/lineup` folder in each repo.
+- **No pipx:** `python -m pip install --user pipx`, then `python -m pipx ensurepath`, then open a new terminal.
+- **One agent only:** `lineup init --agent claude` or `lineup init --agent codex`.
+- **Upgrade:** `pipx upgrade agent-lineup`, then run `lineup init` again in each repo.
+- **Uninstall:** `lineup init --remove` in each repo, then `pipx uninstall agent-lineup`.
+
+</details>
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `lineup init` | Adds the hooks for Claude Code (`.claude/settings.local.json`) and Codex (`.codex/hooks.json`). `--agent claude` or `--agent codex` picks one. `--remove` takes them out again. |
-| `lineup diff` | What changed since the session started, with a short AI summary. |
-| `lineup risky` | Scores each changed file HIGH, MED or LOW using fixed rules, and shows the rule. |
-| `lineup rollback 3 4` | Undoes files by ID or name. Your current version is backed up first. |
-| `lineup dismiss 3` | Says a Scope or Claims flag was wrong. The file goes back to its rule score until it changes again. |
-| `lineup note "..."` | Saves a short tester note for this repo. Secrets become `[REDACTED]`. `--list` shows them. |
-| `lineup report` | Usage counts for tester feedback. `--export` writes `lineup-notes.md` to send. |
+| `lineup risky` | Scores every changed file HIGH, MED or LOW, with the rule behind it |
+| `lineup rollback 2 3` | Undoes files by ID or name. Your current version is backed up first |
+| `lineup diff` | What changed since the session started, with a short AI summary |
+| `lineup dismiss 2` | Says a Scope or Claims flag was wrong |
+| `lineup init` | Adds the hooks (`--remove` takes them out) |
+| `lineup note "..."` | Saves a short note for feedback. Secrets become `[REDACTED]` |
+| `lineup report` | Usage counts for feedback. `--export` writes a file to send |
 
-## Scope and Claims
+## What it catches
 
-Two extra checks run at the end of each reply, using words and file names only (no AI). A hit sends the file straight to HIGH, with a note shown once. `lineup risky` keeps showing it in a Scope or Claims box until you dismiss it.
+| Risk | Examples |
+|---|---|
+| **HIGH** | Tests deleted, assertions removed, skips added · `.env` or key files · auth and payment files · CI and agent settings · install scripts · database migrations |
+| **MED** | Other test edits · config files · new packages · deleted files · 100+ lines removed |
+| **LOW** | Normal code edits · new files · docs · lockfiles |
 
-- **Scope:** a sensitive file (auth, config, CI or agent settings, env, database, packages, install scripts) changed, but your request never mentioned it. If your last message is only a go-ahead ("yes", "ok continue"), lineup uses the request before it.
-- **Claims:** a sensitive file changed, but the agent's last message never names it. Also, as a note only: the agent says it changed a file that didn't change.
+Two extra checks look at the conversation, not just the files:
 
-## Notes and feedback (testers)
+- **Scope:** a sensitive file changed, but your request never mentioned it. *You asked for a blue button, and `auth/session.py` changed.*
+- **Claims:** a sensitive file changed, but the agent's reply never named it. Or the agent says it changed a file that didn't change.
 
-- `lineup note "the flag on the config file was wrong"` saves a note in this repo. Anything that looks like a secret becomes `[REDACTED]`.
-- `lineup report --export` writes `lineup-notes.md` in the repo root: a summary, the usage tables and your notes. It holds file *types* (python, test, config), counts and times, never file names, code or secrets. It's kept out of git and lineup skips it. **Read it before sending.**
-- Everything stays in `.git/lineup/` until you send the file yourself. lineup sends nothing.
+Both send the file to HIGH with a note. Wrong? `lineup dismiss <ID>`.
 
-## What gets sent to the AI
+## How it works
 
-Only `lineup diff` uses AI. It sends the changed lines to the agent you already have (Claude Code with Haiku, or Codex), with no tools. Nothing goes anywhere else, and lineup needs no API key.
+1. **Session starts:** lineup takes a snapshot of your repo. It only copies uncommitted files, and only keeps fingerprints of private ones.
+2. **Agent replies:** lineup compares the repo with the snapshot and scores what changed.
+3. **You check:** `lineup risky` shows the reasons. `lineup diff` gives a summary.
+4. **You undo:** `lineup rollback` restores a file from the snapshot.
 
-- `.env`, key and credential files are never sent. They're listed by name only.
-- Lockfile contents are left out. Secret-looking text is hidden before sending.
-- The hooks, `risky`, `rollback` and `report` use no AI. They run only on your machine.
-- For Scope and Claims, your messages are kept as words only (secrets hidden) in `.git/lineup/` and forgotten at the next session. The agent's last message is checked in memory and never saved. Neither is logged.
-- lineup keeps its photo, file copies and backups in `.git/lineup/` in your repo. Private files are kept as fingerprints only, never copied.
+## Privacy
 
-## Run it in a second terminal
+- The hooks, `risky`, `rollback` and `report` use **no AI**.
+- `lineup diff` sends the changed lines to your own agent (Claude Code with Haiku, or Codex). `.env`, key and lockfile contents are never sent, and secret-looking text is hidden.
+- Your messages are kept as words only for Scope, and forgotten at the next session. The agent's reply is checked in memory and never saved.
+- lineup sends nothing anywhere. Feedback files are written to disk for you to read and send yourself.
 
-You can run lineup with `!` in the same session (for example `! lineup risky`). But anything you run with `!` goes into the agent's context, so the agent may comment on it. Its commentary isn't part of lineup's check: the scores come from fixed rules, not from the agent.
+<details>
+<summary>Tip: run lineup in a second terminal</summary>
 
-To keep the agent out of it, open a second terminal in the same folder and run lineup there.
+You can run lineup with `!` inside the agent (`! lineup risky`), but the output then goes into the agent's context, and it may comment on it. To keep it quiet, open a second terminal in the same folder.
+
+</details>
 
 ## Known limits
 
-- **Claude Code is tested. Codex hooks aren't fully tested yet**, and you must trust them with `/hooks` before they run.
-- The secret scan can miss things. Don't rely on it alone.
+- Claude Code is tested. Codex hooks aren't fully tested yet.
 - Tested on Windows. Mac and Linux aren't tested yet.
-- Rollback can't undo private files, files over 10 MB, links, or changes that are already committed.
-- Scores come from simple rules, so expect some false flags.
+- Rollback can't undo private files, files over 10 MB, links, or committed changes.
+- Scores come from simple rules, so expect some false flags. The secret scan can miss things.
+
+## Learn more
+
+- [Full guide](https://github.com/HARSHAVARDHAN-RAJU5/agent-lineup/blob/main/docs/guide.md): every option and detail
+- [Testers](https://github.com/HARSHAVARDHAN-RAJU5/agent-lineup/blob/main/docs/testers.md): how to try it and send feedback
+- [Changelog](https://github.com/HARSHAVARDHAN-RAJU5/agent-lineup/blob/main/CHANGELOG.md)
 
 ## Develop
 
@@ -108,4 +137,6 @@ pip install -e ".[dev]"
 pytest
 ```
 
-Testers: [docs/testers.md](https://github.com/HARSHAVARDHAN-RAJU5/agent-lineup/blob/main/docs/testers.md).
+MIT licensed.
+
+<p align="center"><img src="assets/lineup-surf.gif" alt="In surfing, the lineup is where you read the water before the next wave" width="100%"></p>
