@@ -69,7 +69,8 @@ lineup keeps a usage log in `.git/lineup/` in each repo. It never leaves your ma
   ```
   lineup report --export
   ```
-  It writes `lineup-notes.md` in the repo folder (kept out of git).
+  It writes `lineup-notes.md` in the repo folder (kept out of git). It covers every session in that repo since you installed lineup, not just the last one.
+- **One file per repo.** Used lineup in 3 repos? Export in all 3 and send all 3 files. Rename them first (`lineup-notes-1.md`, `lineup-notes-2.md`…) so they don't overwrite each other.
 - **Read it before sending.** It should contain no file names, code or secrets. If you see any, delete them. Then send the file.
 
 ## Removing lineup
