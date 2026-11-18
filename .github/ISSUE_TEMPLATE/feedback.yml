@@ -1,0 +1,35 @@
+name: Feedback
+description: A wrong flag, a missed risk, or an idea
+labels: [feedback]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks! **Please don't paste code, file names from work projects, keys or secrets.**
+        Describe things by type instead, like "a config file" or "a test file".
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of feedback
+      options:
+        - A flag was wrong (lineup flagged something that was fine)
+        - A risk was missed (lineup said nothing about something risky)
+        - Scope or Claims got it wrong
+        - Confusing output or wording
+        - Idea or request
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: What happened, and what you'd expect instead.
+      placeholder: The agent changed a config file I asked it to change, but Scope still flagged it as outside my request.
+    validations:
+      required: true
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Agent
+      options: [Claude Code, Codex, Both]

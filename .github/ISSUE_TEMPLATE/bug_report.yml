@@ -1,0 +1,45 @@
+name: Bug report
+description: Something in lineup broke or behaved wrongly
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! **Please don't paste code, file names from work projects, keys or secrets.**
+        Describe things by type instead, like "a config file" or "a test file".
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what lineup did instead.
+      placeholder: I ran lineup rollback 2 on a config file and it said "nothing to do", but the file had changed.
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: lineup's output
+      description: The message or error lineup printed. Remove any file names or secrets first.
+      render: text
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Agent
+      options: [Claude Code, Codex, Both, Not agent-related]
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options: [Windows, Mac, Linux]
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: lineup version
+      description: Run `lineup --version`.
+      placeholder: lineup 0.1.1
+    validations:
+      required: true
